@@ -1,1 +1,1 @@
-# hnteducation.github.io
+hnteducation.github.io
