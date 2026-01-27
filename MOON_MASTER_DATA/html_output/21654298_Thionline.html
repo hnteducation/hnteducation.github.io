@@ -1,0 +1,427 @@
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thi Online: 07. Đề số 7 - Logic, PTSL</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: { extend: { colors: { moon: '#0d47a1', moonlight: '#e3f2fd' } } }
+        }
+    </script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #f3f4f6; }
+        img { max-width: 100%; height: auto; display: inline-block; }
+        img[src*="latex"], img[src*="equation"] { zoom: 0.55; vertical-align: middle; }
+        .q-content img { display: block; margin: 10px auto; }
+        .feedback-correct { background-color: #d1fae5; border-color: #10b981; color: #065f46; }
+        .feedback-wrong { background-color: #fee2e2; border-color: #ef4444; color: #991b1b; }
+        .selected-opt { background-color: #eff6ff; border-color: #3b82f6; }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+    </style>
+</head>
+<body class="pb-20 md:pb-0">
+
+    <!-- HEADER FIXED -->
+    <div class="fixed top-0 left-0 right-0 bg-white shadow-md z-50 px-4 py-3 flex justify-between items-center h-16">
+        <div class="flex items-center gap-4">
+            <h1 class="font-bold text-lg text-moon truncate max-w-[200px] md:max-w-md" title="07. Đề số 7 - Logic, PTSL">07. Đề số 7 - Logic, PTSL</h1>
+            <div id="timer" class="hidden md:flex items-center gap-1 bg-gray-100 px-3 py-1 rounded-full font-mono font-bold text-red-600">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                <span id="time-display">00:00:00</span>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-3">
+             <div class="flex items-center gap-2 text-sm mr-2">
+                <span class="hidden md:inline text-gray-600">Chế độ:</span>
+                <select id="mode-select" class="border border-gray-300 rounded px-2 py-1 bg-gray-50 text-sm focus:outline-none focus:border-moon">
+                    <option value="practice">Luyện tập (Biết ngay Đ/S)</option>
+                    <option value="exam">Thi thử (Nộp mới biết)</option>
+                </select>
+            </div>
+            <button onclick="submitExam()" id="btn-submit" class="bg-moon hover:bg-blue-800 text-white px-4 py-2 rounded-lg font-bold shadow transition-colors text-sm">
+                Nộp bài
+            </button>
+        </div>
+    </div>
+
+    <!-- MAIN LAYOUT -->
+    <div class="flex flex-col md:flex-row mt-16 max-w-7xl mx-auto min-h-screen">
+        
+        <!-- SIDEBAR (Question Palette) -->
+        <div class="md:w-64 bg-white border-r border-gray-200 p-4 hidden md:block fixed bottom-0 top-16 left-0 overflow-y-auto z-40">
+            <div class="mb-4 text-sm font-bold text-gray-500 uppercase">Mục lục câu hỏi</div>
+            <div id="palette-desktop" class="grid grid-cols-4 gap-2"></div>
+        </div>
+
+        <!-- MOBILE PALETTE DRAWER (Hidden by default) -->
+        <div id="mobile-palette" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden" onclick="toggleMobilePalette()">
+            <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-xl p-4 max-h-[70vh] overflow-y-auto" onclick="event.stopPropagation()">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-bold text-lg">Danh sách câu hỏi</h3>
+                    <button onclick="toggleMobilePalette()" class="p-1 bg-gray-100 rounded-full"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg></button>
+                </div>
+                <div id="palette-mobile" class="grid grid-cols-5 gap-3"></div>
+            </div>
+        </div>
+
+        <!-- CONTENT AREA -->
+        <div class="flex-1 md:ml-64 p-4 md:p-8 space-y-8 bg-gray-50 min-h-screen">
+            <div id="exam-content"></div>
+        </div>
+    </div>
+
+    <!-- MOBILE BOTTOM BAR -->
+    <div class="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-2 flex justify-between items-center z-40">
+        <div id="timer-mobile" class="font-mono font-bold text-red-600 text-lg">00:00</div>
+        <button onclick="toggleMobilePalette()" class="flex items-center gap-1 text-gray-600 font-medium px-3 py-1.5 rounded hover:bg-gray-100">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+            Mục lục
+        </button>
+    </div>
+
+    <!-- DATA INJECTION -->
+    <script>
+        const EXAM_DATA = [{"title": "D\u1ef1a v\u00e0o th\u00f4ng tin d\u01b0\u1edbi \u0111\u00e2y \u0111\u1ec3 tr\u1ea3 l\u1eddi c\u00e1c c\u00e2u t\u1eeb 91 \u0111\u1ebfn 94:", "content": "\u201cT\u00e0u l\u01b0\u1ee3n si\u00eau t\u1ed1c\u201d l\u00e0 m\u1ed9t lo\u1ea1i tr\u00f2 ch\u01a1i gi\u1ea3i tr\u00ed c\u1ea3m gi\u00e1c m\u1ea1nh, s\u1eed d\u1ee5ng \u0111\u01b0\u1eddng ray cao v\u1edbi nh\u1eefng kh\u00fac cua, d\u1ed1c v\u00e0 \u0111\u00f4i khi l\u00e0 v\u00f2ng l\u1ed9n ng\u01b0\u1ee3c, mang l\u1ea1i c\u1ea3m gi\u00e1c h\u1ed3i h\u1ed9p v\u00e0 k\u00edch th\u00edch cho ng\u01b0\u1eddi ch\u01a1i. N\u0103m toa \u0111\u1ea7u ti\u00ean c\u1ee7a t\u00e0u \u0111\u01b0\u1ee3c \u0111\u00e1nh s\u1ed1 t\u1eeb 1 \u0111\u1ebfn 5, m\u1ed7i toa c\u00f3 th\u1ec3 ch\u1edf t\u1ed1i \u0111a \u0111\u01b0\u1ee3c hai ng\u01b0\u1eddi. S\u00e1u b\u1ea1n l\u00e0 T, G, L, M, P v\u00e0 J c\u00f9ng tham gia tr\u00f2 ch\u01a1i n\u00e0y. D\u01b0\u1edbi \u0111\u00e2y l\u00e0 m\u1ed9t v\u00e0i th\u00f4ng tin v\u1ec1 ch\u1ed7 ng\u1ed3i c\u1ee7a h\u1ecd:<br/>(i) L ng\u1ed3i chung toa v\u1edbi m\u1ed9t ng\u01b0\u1eddi b\u1ea1n.<br/>(ii) M kh\u00f4ng ng\u1ed3i chung v\u1edbi b\u1ea1n n\u00e0o v\u00e0 ng\u1ed3i ngay sau m\u1ed9t toa tr\u1ed1ng.<br/>(iii) T kh\u00f4ng ng\u1ed3i chung toa v\u1edbi G ho\u1eb7c P.<br/>(iv) G ng\u1ed3i \u1edf toa th\u1ee9 ba ho\u1eb7c th\u1ee9 t\u01b0.", "listQuestion": [{"questionId": 21460647, "lessonId": 0, "a": "Ch\u1ec9 c\u00f3 L.", "b": "T v\u00e0 G.", "c": "L v\u00e0 M.", "d": "C\u1ea3 3 \u0111\u00e1p \u00e1n tr\u00ean \u0111\u1ec1u sai.", "bookId": 1071333, "comments": 0, "bookmarks": 0, "likes": 0, "shares": 0, "typeId": 0, "questionText": "Ai ch\u1eafc ch\u1eafn ng\u1ed3i \u1edf toa th\u1ee9 hai?", "answer": "Ch\u1ecdn \u0111\u00e1p \u00e1n <b>D.\n<br>D\u1ef1a v\u00e0o d\u1eef ki\u1ec7n:\n</b><br>C\u00f3 5 toa t\u00e0u v\u00e0 6 b\u1ea1n, M kh\u00f4ng ng\u1ed3i chung v\u1edbi b\u1ea1n n\u00e0o v\u00e0 ng\u1ed3i ngay sau m\u1ed9t toa tr\u1ed1ng n\u00ean ngo\u00e0i toa c\u1ee7a M v\u00e0 toa tr\u1ed1ng th\u00ec c\u00f2n 3 toa t\u00e0u v\u00e0 5 b\u1ea1n <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/11/311d8272-c67a-4340-be03-253a0f6cf539.png\"/>C\u00f3 2 toa ch\u1edf t\u1ed1i \u0111a 2 b\u1ea1n v\u00e0 2 toa ch\u1ec9 ch\u1ee9a 1 b\u1ea1n.\n<br>K\u1ebft h\u1ee3p v\u1edbi d\u1eef ki\u1ec7n G ng\u1ed3i \u1edf toa th\u1ee9 ba ho\u1eb7c th\u1ee9 t\u01b0, ta c\u00f3 s\u1eafp x\u1ebfp nh\u01b0 sau:<br><img src=\"https://asset.moon.vn/img/chat/large/2025/11/74634b06-2d94-45a8-93e9-c7598146e4c3.jpg\" data-filename=\"\" style=\"max-width: 600px; height: auto;\">\n<br>Suy ra \u1edf toa th\u1ee9 2 ai c\u0169ng c\u00f3 th\u1ec3 ng\u1ed3i tr\u1eeb G.", "key": "D", "isVideo": true, "score": 0, "order": 91, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}, {"questionId": 21460649, "lessonId": 0, "a": "G \u1edf toa th\u1ee9 t\u01b0.", "b": "P \u1edf toa th\u1ee9 ba.", "c": "T \u1edf toa th\u1ee9 n\u0103m.", "d": "L \u1edf toa th\u1ee9 ba.", "bookId": 1071334, "comments": 0, "bookmarks": 0, "likes": 0, "shares": 0, "typeId": 0, "questionText": "N\u1ebfu G ng\u1ed3i ngay sau toa c\u1ee7a L v\u00e0 ngay tr\u01b0\u1edbc toa c\u1ee7a T, th\u00ec t\u1ea5t c\u1ea3 c\u00e1c \u0111i\u1ec1u sau \u0111\u1ec1u \u0111\u00fang ngo\u1ea1i tr\u1eeb:", "answer": "Ch\u1ecdn \u0111\u00e1p \u00e1n <b>B.\n\t</b><br>Do M ph\u1ea3i ng\u1ed3i ngay sau toa tr\u1ed1ng, M \u1edf m\u1ed9t m\u00ecnh v\u00e0 L, G, T ng\u1ed3i li\u00ean ti\u1ebfp nhau \u1edf 3 toa n\u00ean M c\u00f3 th\u1ec3 ng\u1ed3i \u1edf toa th\u1ee9 2 ho\u1eb7c toa th\u1ee9 5.<br><img src=\"https://asset.moon.vn/img/chat/large/2025/11/177b7f1c-eec3-4c2a-9100-f512bc135752.jpg\" data-filename=\"\" style=\"max-width: 600px; height: auto;\">\n<br><b>K\u1ebft h\u1ee3p d\u1eef ki\u1ec7n:\n\t</b><br>G ng\u1ed3i \u1edf toa th\u1ee9 ba ho\u1eb7c th\u1ee9 t\u01b0 n\u00ean M kh\u00f4ng th\u1ec3 ng\u1ed3i toa th\u1ee9 5 (v\u00ec khi n\u00e0y G s\u1ebd ph\u1ea3i ng\u1ed3i toa th\u1ee9 2). Do v\u1eady M \u1edf toa th\u1ee9 2.\n\t<br>Khi n\u00e0y ta c\u00f3 s\u1eafp x\u1ebfp c\u00e1c toa v\u1edbi gi\u1ea3 thi\u1ebft G ng\u1ed3i ngay sau toa c\u1ee7a L v\u00e0 ngay tr\u01b0\u1edbc toa c\u1ee7a T nh\u01b0 sau:<br><img src=\"https://asset.moon.vn/img/chat/large/2025/11/f17b784d-6d6a-4eae-b9f0-4018f497a7e6.jpg\" data-filename=\"\" style=\"max-width: 600px; height: auto;\">\n<br>\tDo T kh\u00f4ng ng\u1ed3i chung toa v\u1edbi G ho\u1eb7c P n\u00ean P ng\u1ed3i \u1edf toa th\u1ee9 3 ho\u1eb7c 4.\n\t<br>Nh\u01b0 v\u1eady P c\u00f3 th\u1ec3 ng\u1ed3i \u1edf 2 toa.\n", "key": "B", "isVideo": true, "score": 0, "order": 92, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}, {"questionId": 21460651, "lessonId": 0, "a": "C\u1ea3 T v\u00e0 G \u0111\u1ec1u kh\u00f4ng ng\u1ed3i chung v\u1edbi b\u1ea1n kh\u00e1c trong toa.", "b": "T ng\u1ed3i c\u00f9ng toa v\u1edbi m\u1ed9t b\u1ea1n.", "c": "C\u1ea3 M v\u00e0 J \u0111\u1ec1u kh\u00f4ng ng\u1ed3i chung v\u1edbi b\u1ea1n kh\u00e1c trong toa.", "d": "G ng\u1ed3i c\u00f9ng toa v\u1edbi m\u1ed9t b\u1ea1n.", "bookId": 1071335, "comments": 0, "bookmarks": 0, "likes": 0, "shares": 0, "typeId": 0, "questionText": "Ph\u00e1t bi\u1ec3u n\u00e0o sau \u0111\u00e2y <b>kh\u00f4ng</b> th\u1ec3 \u0111\u00fang?", "answer": "Ch\u1ecdn \u0111\u00e1p \u00e1n <b>A.</b><br>\n\t\u0110\u00e1p \u00e1n A sai v\u00ec ch\u1ec9 c\u00f3 2 toa ch\u1ec9 ch\u1ee9a 1 ng\u01b0\u1eddi l\u00e0 M v\u00e0 1 toa kh\u00e1c. Do v\u1eady n\u1ebfu T v\u00e0 G \u0111\u1ec1u \u1edf toa 1 ng\u01b0\u1eddi th\u00ec ph\u1ea3i c\u1ea7n \u00edt nh\u1ea5t 6 toa. Lo\u1ea1i.\n", "key": "A", "isVideo": true, "score": 0, "order": 93, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}, {"questionId": 21460652, "lessonId": 0, "a": "M.", "b": "G, P.", "c": "T, L, P.", "d": "T, L, M.", "bookId": 1071336, "comments": 0, "bookmarks": 0, "likes": 0, "shares": 0, "typeId": 0, "questionText": "Gi\u1ea3 s\u1eed c\u00f3 ng\u01b0\u1eddi th\u1ee9 b\u1ea3y c\u00f9ng ng\u1ed3i v\u1edbi J \u1edf toa th\u1ee9 nh\u1ea5t, v\u00e0 c\u00e1c \u0111i\u1ec1u ki\u1ec7n kh\u00e1c v\u1eabn gi\u1eef nguy\u00ean. Khi \u0111\u00f3, nh\u00f3m ng\u01b0\u1eddi n\u00e0o sau \u0111\u00e2y c\u00f3 th\u1ec3 ng\u1ed3i \u1edf toa th\u1ee9 n\u0103m?", "answer": "Ch\u1ecdn \u0111\u00e1p \u00e1n<b> D.</b><br>\n\tT\u1eeb gi\u1ea3 thi\u1ebft c\u00f3 ng\u01b0\u1eddi th\u1ee9 b\u1ea3y c\u00f9ng ng\u1ed3i v\u1edbi J \u1edf toa th\u1ee9 nh\u1ea5t:<br><img src=\"https://asset.moon.vn/img/chat/large/2025/11/5687bcac-9635-49ed-87a6-ab9728086115.jpg\" data-filename=\"\" style=\"max-width: 600px; height: auto;\"> \n<br>G \u1edf toa th\u1ee9 3 ho\u1eb7c 4 n\u00ean ta c\u00f3 2 tr\u01b0\u1eddng h\u1ee3p sau:\n\t<br>TH1: G \u1edf toa th\u1ee9 3 <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/11/31c34040-ecd6-4b68-bbcd-a0e02917f11f.png\"/>M \u1edf sau 1 toa tr\u1ed1ng n\u00ean M s\u1ebd \u1edf toa 5 v\u1edbi toa tr\u1ed1ng \u1edf toa 4.<br><img src=\"https://asset.moon.vn/img/chat/large/2025/11/be3f850b-6ef0-4029-81d1-9ea96d3a01a9.jpg\" data-filename=\"\" style=\"max-width: 600px; height: auto;\">\n<br>\tDo T kh\u00f4ng ng\u1ed3i \u1edf toa v\u1edbi G ho\u1eb7c P n\u00ean G, P chung toa v\u00e0 T \u1edf toa v\u1edbi L. Tr\u01b0\u1eddng h\u1ee3p n\u00e0y th\u1ecfa m\u00e3n.<br><img src=\"https://asset.moon.vn/img/chat/large/2025/11/4d9d637e-15e2-41ad-8bd5-54636d14db7c.jpg\" data-filename=\"\" style=\"max-width: 600px; height: auto;\"><br>TH2: G \u1edf toa th\u1ee9 4 <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/11/91c04c2f-d657-4ad8-8043-7b8eff7d80e1.png\"/>M \u1edf sau 1 toa tr\u1ed1ng n\u00ean M s\u1ebd \u1edf toa 3 v\u1edbi toa tr\u1ed1ng \u1edf toa 2. Do T kh\u00f4ng ng\u1ed3i \u1edf toa v\u1edbi G ho\u1eb7c P n\u00ean G, P chung toa v\u00e0 T \u1edf toa v\u1edbi L. Tr\u01b0\u1eddng h\u1ee3p n\u00e0y th\u1ecfa m\u00e3n.<br><img src=\"https://asset.moon.vn/img/chat/large/2025/11/cf12f175-d677-4839-92b1-44d21b02cbb9.jpg\" data-filename=\"\" style=\"max-width: 600px; height: auto;\"><br>\tNh\u01b0 v\u1eady toa 5 c\u00f3 th\u1ec3 l\u00e0 M ho\u1eb7c L, T.", "key": "D", "isVideo": true, "score": 0, "order": 94, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}]}, {"title": "D\u1ef1a v\u00e0o th\u00f4ng tin d\u01b0\u1edbi \u0111\u00e2y \u0111\u1ec3 tr\u1ea3 l\u1eddi c\u00e1c c\u00e2u t\u1eeb 95 \u0111\u1ebfn 98:", "content": "Trong m\u1ed9t gi\u1ea3i \u0111\u1ea5u, m\u1ed7i b\u1ea3ng c\u00f3 6 \u0111\u1ed9i v\u00e0 c\u00e1c \u0111\u1ed9i ph\u1ea3i thi \u0111\u1ea5u v\u00f2ng tr\u00f2n m\u1ed9t l\u01b0\u1ee3t. Trong tr\u1eadn \u0111\u1ea5u gi\u1eefa hai \u0111\u1ed9i b\u1ea5t k\u00ec, \u0111\u1ed9i th\u1eafng \u0111\u01b0\u1ee3c hai \u0111i\u1ec3m, \u0111\u1ed9i thua kh\u00f4ng c\u00f3 \u0111i\u1ec3m v\u00e0 n\u1ebfu h\u00f2a th\u00ec m\u1ed7i \u0111\u1ed9i \u0111\u01b0\u1ee3c m\u1ed9t \u0111i\u1ec3m. \u0110i\u1ec3m c\u1ee7a A, B, C, D, E v\u00e0 F l\u00e0 l\u1ea7n l\u01b0\u1ee3t l\u00e0 9, 8, 7, 3, 2 v\u00e0 1 \u0111i\u1ec3m. C\u00f3 \u0111\u00fang hai tr\u1eadn h\u00f2a.", "listQuestion": [{"questionId": 11154470, "lessonId": 0, "a": "A.", "b": "C.", "c": "F.", "d": "Kh\u00f4ng th\u1ec3 x\u00e1c \u0111\u1ecbnh.", "bookId": 379897, "comments": 22, "bookmarks": 27, "likes": 0, "shares": 0, "typeId": 0, "questionText": "D h\u00f2a v\u1edbi \u0111\u1ed9i n\u00e0o sau \u0111\u00e2y?", "answer": "<b>D\u1ef1a v\u00e0o d\u1eef ki\u1ec7n: </b><br>\u2022\tTrong m\u1ed9t gi\u1ea3i \u0111\u1ea5u, m\u1ed7i b\u1ea3ng c\u00f3 6 \u0111\u1ed9i v\u00e0 c\u00e1c \u0111\u1ed9i ph\u1ea3i thi \u0111\u1ea5u v\u00f2ng trong m\u1ed9t l\u01b0\u1ee3t <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/11/7d7bcea0-ca4e-4989-acd7-045060b341ae.png\"/> M\u1ed7i \u0111\u1ed9i thi \u0111\u1ea5u v\u1edbi nhau 1 l\u1ea7n (m\u1ed7i \u0111\u1ed9i thi \u0111\u1ea5u 5 tr\u1eadn). <br>\u2022\tTrong tr\u1eadn \u0111\u1ea5u gi\u1eefa hai \u0111\u1ed9i b\u1ea5t k\u1ef3, \u0111\u1ed9i th\u1eafng \u0111\u01b0\u1ee3c hai \u0111i\u1ec3m, \u0111\u1ed9i thua kh\u00f4ng c\u00f3 \u0111i\u1ec3m v\u00e0 n\u1ebfu h\u00f2a th\u00ec m\u1ed7i \u0111\u1ed9i \u0111\u01b0\u1ee3c m\u1ed9t \u0111i\u1ec3m. <br>\u2022\t\u0110i\u1ec3m c\u1ee7a A, B, C, D, E v\u00e0 F l\u00e0 l\u1ea7n l\u01b0\u1ee3t l\u00e0 9, 8, 7, 3, 2 v\u00e0 1 \u0111i\u1ec3m <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/11/d15e0cbe-943b-409d-818d-5d3b46749841.png\"/> A, C, D v\u00e0 F c\u00f3 s\u1ed1 \u0111i\u1ec3m l\u1ebb n\u00ean  m\u1ed7i \u0111\u1ed9i c\u00f3 1 tr\u1eadn h\u00f2a. <br>\u2022\tC\u00f3 \u0111\u00fang hai tr\u1eadn h\u00f2a. <br><b><i><u>B\u1ea3ng minh h\u1ecda:</u></i></b><br><img src=\"https://asset.moon.vn/img/ai/Teachers/haquanghung/riotgame/%E1%BA%A2nh%20ch%E1%BB%A5p%20m%C3%A0n%20h%C3%ACnh%202024-05-24%20141707.png\" alt=\"\u1ea2nh ch\u1ee5p m\u00e0n h\u00ecnh 2024-05-24 141707.png\" width=\"500\" height=\"151\" border=\"0\"><br> N\u1ebfu D c\u00f3 m\u1ed9t tr\u1eadn h\u00f2a v\u1edbi A ho\u1eb7c C, th\u00ec F c\u0169ng ph\u1ea3i c\u00f3 m\u1ed9t tr\u1eadn h\u00f2a v\u1edbi A ho\u1eb7c C <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/11/9f33ddec-ce56-4000-a51f-c0f47183f793.png\"/> C\u1ea3 D v\u00e0 E \u0111\u1ec1u th\u1eafng F <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/11/0a0eb05a-8866-4aa0-8be5-5665a1c839ca.png\"/> D v\u00e0 E thi \u0111\u1ea5u v\u1edbi nhau t\u1ea1o ra <b>m\u00e2u thu\u1eabn v\u00ec kh\u00f4ng c\u00f3 tr\u01b0\u1eddng h\u1ee3p x\u1ea3y ra <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/11/beeab786-591f-4b98-a1ec-55a3a0f8a75c.png\"/> </b>D c\u00f3 m\u1ed9t tr\u1eadn h\u00f2a v\u1edbi F. <br><img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/11/769d0019-1ac2-4fd0-b676-a51589da4597.png\"/> Ch\u1ecdn \u0111\u00e1p \u00e1n <b>C.</b>", "key": "C", "isVideo": true, "score": 0, "order": 95, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}, {"questionId": 11154475, "lessonId": 0, "a": "D.", "b": "C.", "c": "F.", "d": "B.", "bookId": 379898, "comments": 0, "bookmarks": 9, "likes": 0, "shares": 0, "typeId": 0, "questionText": "A h\u00f2a v\u1edbi \u0111\u1ed9i n\u00e0o sau \u0111\u00e2y?", "answer": "<b>D\u1ef1a v\u00e0o d\u1eef ki\u1ec7n ph\u00e2n t\u00edch gi\u1ea3 thi\u1ebft: </b><div><b><i><u>B\u1ea3ng minh h\u1ecda:\r\n</u></i></b></div><div><b><i><u><img src=\"https://asset.moon.vn/img/ai/Teachers/haquanghung/riotgame/%E1%BA%A2nh%20ch%E1%BB%A5p%20m%C3%A0n%20h%C3%ACnh%202024-05-24%20141945.png\" alt=\"\u1ea2nh ch\u1ee5p m\u00e0n h\u00ecnh 2024-05-24 141945.png\" width=\"500\" height=\"156\" border=\"0\"><br></u></i></b></div>N\u1ebfu D c\u00f3 m\u1ed9t tr\u1eadn h\u00f2a v\u1edbi A ho\u1eb7c C, th\u00ec F c\u0169ng ph\u1ea3i c\u00f3 m\u1ed9t tr\u1eadn h\u00f2a v\u1edbi A ho\u1eb7c C <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/7/d9fd7ba8-9ba4-49e6-b005-992231496b97.png\"/> C\u1ea3 D v\u00e0 E \u0111\u1ec1u th\u1eafng F <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/7/3d051dd0-5093-4d34-97c0-60adff6227c3.png\"/> D v\u00e0 E thi \u0111\u1ea5u v\u1edbi nhau t\u1ea1o ra <b>m\u00e2u thu\u1eabn v\u00ec kh\u00f4ng c\u00f3 tr\u01b0\u1eddng h\u1ee3p x\u1ea3y ra <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/7/5b11d6cb-38e0-47bc-acba-0d76ba31f7a7.png\"/></b> D c\u00f3 m\u1ed9t tr\u1eadn h\u00f2a v\u1edbi F <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/7/a7c60ca7-b816-46a3-9870-fa6e67b8d1c9.png\"/> A c\u00f3 m\u1ed9t tr\u1eadn h\u00f2a v\u1edbi C. <div><img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/7/080b7a95-d20e-4496-a00f-f95c64c53d97.png\"/> Ch\u1ecdn \u0111\u00e1p \u00e1n <b>B.\r\n</b></div>", "key": "B", "isVideo": true, "score": 0, "order": 96, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}, {"questionId": 11154477, "lessonId": 0, "a": "D.", "b": "E.", "c": "F.", "d": "E v\u00e0 F.", "bookId": 379899, "comments": 0, "bookmarks": 7, "likes": 0, "shares": 0, "typeId": 0, "questionText": "\u0110\u1ed9i n\u00e0o sau \u0111\u00e2y b\u1ecb thua nhi\u1ec1u nh\u1ea5t?", "answer": "<b>D\u1ef1a v\u00e0o d\u1eef ki\u1ec7n ph\u00e2n t\u00edch gi\u1ea3 thi\u1ebft: </b><div><b><u><i>B\u1ea3ng minh h\u1ecda:\r\n</i></u></b></div><div><b><u><i><img src=\"https://asset.moon.vn/img/ai/Teachers/haquanghung/riotgame/%E1%BA%A2nh%20ch%E1%BB%A5p%20m%C3%A0n%20h%C3%ACnh%202024-05-24%20141945.png\" alt=\"\u1ea2nh ch\u1ee5p m\u00e0n h\u00ecnh 2024-05-24 141945.png\" width=\"500\" height=\"156\" border=\"0\"><br></i></u></b></div>C\u1ea3 E v\u00e0 F \u0111\u1ec1u thua 4 tr\u1eadn. <div><img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/7/b807f40b-6525-429b-b652-daeb393fe769.png\"/>Ch\u1ecdn \u0111\u00e1p \u00e1n<b> D.\r\n</b></div>", "key": "D", "isVideo": true, "score": 0, "order": 97, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}, {"questionId": 11154479, "lessonId": 0, "a": "B.", "b": "C.", "c": "D.", "d": "E.", "bookId": 379900, "comments": 2, "bookmarks": 7, "likes": 0, "shares": 0, "typeId": 0, "questionText": "\u0110\u1ed9i A thi \u0111\u1ea5u <b>kh\u00f4ng th\u1ec3</b> th\u1eafng \u0111\u1ed9i n\u00e0o trong s\u1ed1 c\u00e1c \u0111\u1ed9i sau?", "answer": "<b>D\u1ef1a v\u00e0o d\u1eef ki\u1ec7n ph\u00e2n t\u00edch gi\u1ea3 thi\u1ebft: </b><div><b><i><u>B\u1ea3ng minh h\u1ecda:\r\n</u></i></b></div><div><b><i><u><img src=\"https://asset.moon.vn/img/ai/Teachers/haquanghung/riotgame/%E1%BA%A2nh%20ch%E1%BB%A5p%20m%C3%A0n%20h%C3%ACnh%202024-05-24%20142401.png\" alt=\"\u1ea2nh ch\u1ee5p m\u00e0n h\u00ecnh 2024-05-24 142401.png\" width=\"500\" height=\"156\" border=\"0\"><br></u></i></b></div>\u0110\u1ed9i A h\u00f2a \u0111\u1ed9i C n\u00ean \u0111\u1ed9i A kh\u00f4ng th\u1ec3 th\u1eafng \u0111\u1ed9i C. <div><img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/7/aab35e77-14d9-47ca-8550-0d4f872accd3.png\"/>Ch\u1ecdn \u0111\u00e1p \u00e1n <b>B.\r\n</b></div>", "key": "B", "isVideo": true, "score": 0, "order": 98, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}]}, {"title": "D\u1ef1a v\u00e0o th\u00f4ng tin d\u01b0\u1edbi \u0111\u00e2y \u0111\u1ec3 tr\u1ea3 l\u1eddi c\u00e1c c\u00e2u t\u1eeb 99 \u0111\u1ebfn 102:", "content": "Bi\u1ec3u \u0111\u1ed3 tr\u00f2n d\u01b0\u1edbi \u0111\u00e2y th\u1ec3 hi\u1ec7n t\u1ec9 l\u1ec7 ph\u1ea7n tr\u0103m kh\u00ed th\u1ea3i CO<sub>2</sub> ra m\u00f4i tr\u01b0\u1eddng h\u1eb1ng n\u0103m theo t\u1eebng l\u0129nh v\u1ef1c. Bi\u1ebft r\u1eb1ng, t\u1ed5ng kh\u00ed th\u1ea3i CO<sub>2</sub> h\u1eb1ng n\u0103m \u0111\u1ea1t 5 tri\u1ec7u t\u1ea5n.<br><img src=\"https://asset.moon.vn/img/chat/large/2025/11/552d7179-4dc8-445a-b0f9-65acc50f561e.jpg\" data-filename=\"\" style=\"width: 50%; max-width: 600px;\">", "listQuestion": [{"questionId": 11201530, "lessonId": 0, "a": "Nhi\u1ec7t v\u00e0 v\u1eadn t\u1ea3i.", "b": "N\u1ed9i \u0111\u1ecba v\u00e0 th\u01b0\u01a1ng m\u1ea1i.", "c": "V\u1eadn t\u1ea3i v\u00e0 th\u01b0\u01a1ng m\u1ea1i.", "d": "Nhi\u1ec7t v\u00e0 th\u01b0\u01a1ng m\u1ea1i.", "bookId": 380813, "comments": 0, "bookmarks": 0, "likes": 0, "shares": 0, "typeId": 0, "questionText": "Hai l\u0129nh v\u1ef1c n\u00e0o sau \u0111\u00e2y \u0111\u00e3 th\u1ea3i ra 2,5 tri\u1ec7u t\u1ea5n CO<sub>2</sub> m\u1ed7i n\u0103m?", "answer": "Ch\u1ecdn \u0111\u00e1p \u00e1n <b>D</b>.<br>2,5 tri\u1ec7u t\u1ea5n t\u01b0\u01a1ng \u1ee9ng v\u01a1i <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/12/e1b5459a-af99-454e-8afc-67a635f2fd71.png\"/> <br><img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/12/1f6fae1c-b674-405d-beed-56a7fea45886.png\"/> T\u01b0\u01a1ng \u1ee9ng v\u1edbi Nhi\u1ec7t + Th\u01b0\u01a1ng m\u1ea1i.", "key": "D", "isVideo": true, "score": 0, "order": 99, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}, {"questionId": 11201532, "lessonId": 0, "a": "N\u1ed9i \u0111\u1ecba v\u00e0 v\u1eadn t\u1ea3i.", "b": "V\u1eadn t\u1ea3i v\u00e0 th\u01b0\u01a1ng m\u1ea1i.", "c": "Nhi\u1ec7t \u0111i\u1ec7n v\u00e0 n\u1ed9i \u0111\u1ecba.", "d": "\u0110\u00e1p \u00e1n kh\u00e1c.", "bookId": 380814, "comments": 0, "bookmarks": 0, "likes": 0, "shares": 0, "typeId": 0, "questionText": "Hai l\u0129nh v\u1ef1c n\u00e0o sau \u0111\u00e2y c\u00f3 m\u1ee9c ch\u00eanh l\u1ec7ch kh\u00ed th\u1ea3i 1 tri\u1ec7u t\u1ea5n CO<sub>2</sub> m\u1ed7i n\u0103m?", "answer": "Ch\u1ecdn \u0111\u00e1p \u00e1n <b>A</b>.<br>1 tri\u1ec7u t\u1ea5n CO<sub>2</sub> t\u01b0\u01a1ng \u1ee9ng v\u1edbi 1/5 = 20% t\u01b0\u01a1ng \u1ee9ng v\u1edbi ch\u00eanh l\u1ec7ch gi\u1eefa n\u1ed9i \u0111\u1ecba v\u00e0 v\u1eadn t\u1ea3i.", "key": "A", "isVideo": true, "score": 0, "order": 100, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}, {"questionId": 11201534, "lessonId": 0, "a": "100%.", "b": "75%.", "c": "80%.", "d": "95%.", "bookId": 380815, "comments": 0, "bookmarks": 0, "likes": 0, "shares": 0, "typeId": 0, "questionText": "Kh\u00ed th\u1ea3i c\u1ee7a khu v\u1ef1c n\u1ed9i \u0111\u1ecba b\u1eb1ng bao nhi\u00eau ph\u1ea7n tr\u0103m t\u1ed5ng kh\u00ed th\u1ea3i c\u1ee7a ng\u00e0nh v\u1eadn t\u1ea3i v\u00e0 ng\u00e0nh th\u01b0\u01a1ng m\u1ea1i?", "answer": "Ch\u1ecdn \u0111\u00e1p \u00e1n <b>A</b>. <br>Kh\u00ed th\u1ea3i c\u1ee7a khu v\u1ef1c n\u1ed9i \u0111\u1ecba b\u1eb1ng s\u1ed1 ph\u1ea7n tr\u0103m t\u1ed5ng kh\u00ed th\u1ea3i c\u1ee7a ng\u00e0nh v\u1eadn t\u1ea3i v\u00e0 ng\u00e0nh th\u01b0\u01a1ng m\u1ea1i  <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2024/12/9fb7ceb0-8e62-41db-8788-b84d58d378bd.png\"/>", "key": "A", "isVideo": true, "score": 0, "order": 101, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}, {"questionId": 11201535, "lessonId": 0, "a": "31,25%.", "b": "39,8%.", "c": "42,7%.", "d": "36,5%.", "bookId": 380816, "comments": 0, "bookmarks": 3, "likes": 0, "shares": 0, "typeId": 0, "questionText": "Trong n\u0103m t\u1edbi, n\u1ebfu kh\u00ed th\u1ea3i t\u1eeb ng\u00e0nh th\u01b0\u01a1ng m\u1ea1i gi\u1ea3m 20% l\u01b0\u1ee3ng kh\u00ed th\u1ea3i hi\u1ec7n t\u1ea1i v\u00e0 c\u00e1c l\u0129nh v\u1ef1c kh\u00e1c v\u1eabn gi\u1eef nguy\u00ean l\u01b0\u1ee3ng kh\u00ed th\u1ea3i CO<sub>2</sub> nh\u01b0 tr\u01b0\u1edbc th\u00ec t\u1ef7 l\u1ec7 m\u1edbi c\u1ee7a ng\u00e0nh nhi\u1ec7t s\u1ebd x\u1ea5p x\u1ec9 bao nhi\u00eau ph\u1ea7n tr\u0103m?", "answer": "Ch\u1ecdn \u0111\u00e1p \u00e1n <b>A</b>.<br>T\u1ef7 l\u1ec7 m\u1edbi c\u1ee7a ng\u00e0nh nhi\u1ec7t l\u00e0: <img style = \"vertical-align:middle\" src= \"https://asset.moon.vn/new-latex/2025/10/6ed1a157-05cd-496a-a7a8-54c3b2d8faee.png\"/>", "key": "A", "isVideo": true, "score": 0, "order": 102, "fillKey": "", "yourKey": "", "isTested": false, "isBookmark": false, "liked": false, "questionScore": 0.83, "plans": [], "answerPlans": [], "normalizedType": "0"}]}];
+        let userAnswers = {}; // Store: { qId: value }
+        let isSubmitted = false;
+        let examMode = 'practice'; // 'practice' or 'exam'
+        let startTime = Date.now();
+        let timerInterval;
+
+        // --- INIT ---
+        window.onload = function() {
+            renderExam();
+            startTimer();
+            document.getElementById('mode-select').addEventListener('change', (e) => {
+                if(isSubmitted) return;
+                if(confirm('Đổi chế độ sẽ làm mới lại trạng thái hiển thị (không mất bài làm). Tiếp tục?')) {
+                    examMode = e.target.value;
+                    renderExam(false); // Re-render without resetting answers
+                } else {
+                    e.target.value = examMode;
+                }
+            });
+        };
+
+        // --- TIMER LOGIC ---
+        function startTimer() {
+            timerInterval = setInterval(() => {
+                if(isSubmitted) return;
+                const diff = Math.floor((Date.now() - startTime) / 1000);
+                const h = Math.floor(diff / 3600).toString().padStart(2, '0');
+                const m = Math.floor((diff % 3600) / 60).toString().padStart(2, '0');
+                const s = (diff % 60).toString().padStart(2, '0');
+                const timeStr = `${h}:${m}:${s}`;
+                document.getElementById('time-display').innerText = timeStr;
+                document.getElementById('timer-mobile').innerText = `${m}:${s}`;
+            }, 1000);
+        }
+
+        // --- RENDER ENGINE ---
+        function renderExam(reset = false) {
+            const container = document.getElementById('exam-content');
+            const palDesk = document.getElementById('palette-desktop');
+            const palMob = document.getElementById('palette-mobile');
+            
+            if(reset) container.innerHTML = '';
+            else container.innerHTML = ''; // Clear to re-render
+            
+            palDesk.innerHTML = '';
+            palMob.innerHTML = '';
+
+            let globalIdx = 0;
+
+            EXAM_DATA.forEach((group, gIdx) => {
+                // Render Group Header
+                if(group.title && group.title.toLowerCase() !== 'danh sách câu hỏi' || group.content) {
+                    const gDiv = document.createElement('div');
+                    gDiv.className = 'bg-white p-4 rounded-lg shadow-sm border-l-4 border-moon mb-4';
+                    gDiv.innerHTML = `
+                        ${group.title ? `<h3 class="font-bold text-gray-800 text-lg mb-2">${group.title}</h3>` : ''}
+                        ${group.content ? `<div class="text-gray-600 italic text-sm">${group.content}</div>` : ''}
+                    `;
+                    container.appendChild(gDiv);
+                }
+
+                group.listQuestion.forEach((q, qIdx) => {
+                    globalIdx++;
+                    const qId = q.order || q.Order || globalIdx;
+                    const qKey = `q_${gIdx}_${qIdx}`; // Unique Key for storage
+                    const qType = q.normalizedType;
+                    
+                    // -- Palette Item --
+                    const palBtn = document.createElement('button');
+                    palBtn.className = `p-2 rounded text-center text-sm font-bold border transition-colors ${userAnswers[qKey] ? 'bg-blue-100 border-blue-300 text-blue-700' : 'bg-gray-50 border-gray-200 text-gray-500'}`;
+                    palBtn.innerText = qId;
+                    palBtn.id = `pal_${qKey}`;
+                    palBtn.onclick = () => document.getElementById(`question-${qKey}`).scrollIntoView({behavior: 'smooth', block: 'center'});
+                    palDesk.appendChild(palBtn.cloneNode(true)); // Add to Desktop
+                    palMob.appendChild(palBtn); // Add to Mobile
+
+                    // -- Question Card --
+                    const qCard = document.createElement('div');
+                    qCard.id = `question-${qKey}`;
+                    qCard.className = 'bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200 transition-all hover:shadow-md';
+                    
+                    // Header: Question Number
+                    let html = `<div class="flex items-start gap-3 mb-4">
+                        <span class="flex-none bg-moon text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm">${qId}</span>
+                        <div class="flex-1">
+                            <div class="q-content text-gray-800 text-base leading-relaxed">${q.questionText}</div>
+                        </div>
+                    </div>`;
+
+                    // Interaction Area
+                    html += `<div class="ml-0 md:ml-11 mt-4 space-y-3" id="interaction-${qKey}">`;
+                    
+                    // === TYPE 0: MCQ ===
+                    if(qType === '0') {
+                        ['a', 'b', 'c', 'd'].forEach(opt => {
+                            const val = q[opt];
+                            if(!val) return;
+                            const isSelected = userAnswers[qKey] === opt.toUpperCase();
+                            const isCorrect = q.key && q.key.toUpperCase() === opt.toUpperCase();
+                            
+                            let btnClass = "w-full text-left p-3 rounded-lg border-2 border-gray-100 hover:bg-gray-50 transition-all flex items-start gap-3 group cursor-pointer";
+                            let icon = `<div class="w-6 h-6 rounded-full border-2 border-gray-300 flex items-center justify-center text-xs font-bold text-gray-400 group-hover:border-blue-400">${opt.toUpperCase()}</div>`;
+                            let feedback = "";
+
+                            if(isSelected) {
+                                btnClass = "w-full text-left p-3 rounded-lg border-2 bg-blue-50 border-blue-400 text-blue-800 flex items-start gap-3 cursor-pointer";
+                                icon = `<div class="w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">✓</div>`;
+                            }
+
+                            // Logic hiển thị kết quả
+                            if((isSubmitted || examMode === 'practice') && userAnswers[qKey]) {
+                                if(isCorrect) {
+                                    if(isSelected) { // Chọn đúng
+                                        btnClass = "w-full text-left p-3 rounded-lg border-2 bg-green-50 border-green-500 text-green-800 flex items-start gap-3";
+                                        feedback = `<span class="ml-auto text-green-600 font-bold text-sm">Chính xác</span>`;
+                                    } else if (isSubmitted) { // Đúng nhưng không chọn (hiện đáp án khi nộp)
+                                         btnClass += " ring-2 ring-green-400 ring-offset-1";
+                                         feedback = `<span class="ml-auto text-green-600 font-bold text-sm">Đáp án đúng</span>`;
+                                    }
+                                } else {
+                                    if(isSelected) { // Chọn sai
+                                        btnClass = "w-full text-left p-3 rounded-lg border-2 bg-red-50 border-red-400 text-red-800 flex items-start gap-3";
+                                        feedback = `<span class="ml-auto text-red-600 font-bold text-sm">Sai rồi</span>`;
+                                    }
+                                }
+                            } else if (isSubmitted && isCorrect) {
+                                 btnClass += " bg-green-50 border-green-400"; // Hiện đáp án đúng sau khi nộp dù chưa làm
+                            }
+
+                            html += `
+                            <div onclick="handleSelect('${qKey}', '${opt.toUpperCase()}', '0')" class="${btnClass}">
+                                ${icon}
+                                <div class="flex-1">${val}</div>
+                                ${feedback}
+                            </div>`;
+                        });
+                    }
+
+                    // === TYPE 1 & 3: FILL KEY ===
+                    else if(qType === '1' || qType === '3') {
+                        const userVal = userAnswers[qKey] || '';
+                        const correctVal = q.fillKey ? q.fillKey.trim() : '';
+                        
+                        let inputClass = "w-full p-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all font-mono";
+                        let feedbackHtml = "";
+
+                        if((isSubmitted || (examMode === 'practice' && userVal))) {
+                            const isCorrect = userVal.toLowerCase() === correctVal.toLowerCase();
+                            if(isCorrect) {
+                                inputClass = "w-full p-3 border-2 border-green-500 bg-green-50 text-green-800 rounded-lg font-bold";
+                                feedbackHtml = `<div class="mt-1 text-green-600 text-sm font-bold">✓ Chính xác!</div>`;
+                            } else {
+                                inputClass = "w-full p-3 border-2 border-red-500 bg-red-50 text-red-800 rounded-lg";
+                                feedbackHtml = `<div class="mt-1 text-red-600 text-sm">
+                                    ✗ Sai. Đáp án đúng: <span class="font-bold text-green-700">${correctVal}</span>
+                                </div>`;
+                            }
+                        }
+
+                        html += `
+                        <div>
+                            <input type="text" 
+                                value="${userVal}" 
+                                placeholder="Nhập câu trả lời của bạn..." 
+                                onblur="handleSelect('${qKey}', this.value, '1')" 
+                                class="${inputClass}"
+                                ${isSubmitted ? 'disabled' : ''}
+                            />
+                            ${feedbackHtml}
+                        </div>`;
+                    }
+
+                    // === TYPE 2: TRUE/FALSE ===
+                    else if(qType === '2') {
+                         html += `<div class="overflow-x-auto"><table class="w-full text-sm text-left text-gray-500 border rounded-lg overflow-hidden">
+                            <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                                <tr>
+                                    <th scope="col" class="px-4 py-3 w-16 text-center">Ý</th>
+                                    <th scope="col" class="px-4 py-3">Nội dung</th>
+                                    <th scope="col" class="px-4 py-3 w-24 text-center">Đúng</th>
+                                    <th scope="col" class="px-4 py-3 w-24 text-center">Sai</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+                        
+                        const subLabels = ['a', 'b', 'c', 'd'];
+                        const userObj = userAnswers[qKey] || {}; // {0: true, 1: false}
+                        
+                        if(q.plans) {
+                            q.plans.forEach((plan, pIdx) => {
+                                const isTrue = plan.key == "1"; // Dap an he thong
+                                const userChoice = userObj[pIdx]; // true/false/undefined
+                                
+                                let trClass = "bg-white border-b hover:bg-gray-50";
+                                let btnTrueClass = "w-6 h-6 rounded border flex items-center justify-center cursor-pointer hover:bg-gray-200";
+                                let btnFalseClass = "w-6 h-6 rounded border flex items-center justify-center cursor-pointer hover:bg-gray-200";
+                                
+                                if(userChoice === true) btnTrueClass = "w-6 h-6 rounded bg-blue-500 text-white border-blue-600 flex items-center justify-center font-bold";
+                                if(userChoice === false) btnFalseClass = "w-6 h-6 rounded bg-blue-500 text-white border-blue-600 flex items-center justify-center font-bold";
+
+                                // Logic mau sac
+                                if((isSubmitted || examMode === 'practice') && userChoice !== undefined) {
+                                    if(userChoice === isTrue) {
+                                        trClass = "bg-green-50 border-b border-green-200"; // Row dung
+                                    } else {
+                                        trClass = "bg-red-50 border-b border-red-200"; // Row sai
+                                    }
+                                }
+
+                                html += `<tr class="${trClass}">
+                                    <td class="px-4 py-3 font-bold text-center">${subLabels[pIdx] || '-'}</td>
+                                    <td class="px-4 py-3 text-gray-800">${plan.content}</td>
+                                    <td class="px-4 py-3 text-center">
+                                        <div onclick="handleTF('${qKey}', ${pIdx}, true)" class="mx-auto ${btnTrueClass}">Đ</div>
+                                    </td>
+                                    <td class="px-4 py-3 text-center">
+                                        <div onclick="handleTF('${qKey}', ${pIdx}, false)" class="mx-auto ${btnFalseClass}">S</div>
+                                    </td>
+                                </tr>`;
+                            });
+                        }
+                        html += `</tbody></table></div>`;
+                    }
+
+                    html += `</div>`; // End Interaction
+
+                    // === SOLUTION (Hidden until submitted or practice & answered) ===
+                    if(q.answer && (isSubmitted || (examMode === 'practice' && userAnswers[qKey]))) {
+                         html += `
+                         <div class="mt-4 pt-4 border-t border-dashed border-gray-300">
+                            <div class="text-sm font-bold text-gray-500 uppercase mb-2">Lời giải chi tiết:</div>
+                            <div class="bg-yellow-50 p-4 rounded-lg text-gray-800 text-sm border border-yellow-200">
+                                ${q.answer}
+                            </div>
+                         </div>
+                         `;
+                    }
+
+                    qCard.innerHTML = html;
+                    container.appendChild(qCard);
+                });
+            });
+        }
+
+        // --- HANDLERS ---
+        function handleSelect(qKey, value, type) {
+            if(isSubmitted) return;
+            userAnswers[qKey] = value;
+            updatePalette(qKey);
+            // Re-render only this card? No, re-render specific parts or whole logic. 
+            // For simplicity in this vanilla JS version, we re-render full exam to update UI states.
+            // In React/Vue we would bind state. Here we cheat by re-rendering.
+            // Optimization: Only re-render if mode is practice (to show instant feedback)
+            if(examMode === 'practice') {
+                 renderExam(false);
+                 // Restore focus for text inputs
+                 if(type === '1') setTimeout(() => document.querySelector(`input[onblur*="${qKey}"]`)?.focus(), 50);
+            } else {
+                // In Exam mode, just visual update selection without full re-render (optional optimization)
+                renderExam(false);
+            }
+        }
+
+        function handleTF(qKey, pIdx, value) {
+            if(isSubmitted) return;
+            if(!userAnswers[qKey]) userAnswers[qKey] = {};
+            userAnswers[qKey][pIdx] = value;
+            updatePalette(qKey);
+            renderExam(false);
+        }
+
+        function updatePalette(qKey) {
+            const btnD = document.getElementById(`pal_${qKey}`);
+            if(btnD) {
+                btnD.className = "p-2 rounded text-center text-sm font-bold border transition-colors bg-blue-100 border-blue-300 text-blue-700 shadow-sm";
+            }
+        }
+
+        function submitExam() {
+            if(isSubmitted) return alert('Bạn đã nộp bài rồi!');
+            if(!confirm('Bạn có chắc chắn muốn nộp bài?')) return;
+            
+            isSubmitted = true;
+            clearInterval(timerInterval);
+            document.getElementById('btn-submit').innerText = "Đã nộp bài";
+            document.getElementById('btn-submit').className = "bg-gray-400 text-white px-4 py-2 rounded-lg font-bold shadow cursor-not-allowed text-sm";
+            
+            // Calculate Score
+            let correctCount = 0;
+            let totalQ = 0;
+            
+            EXAM_DATA.forEach(g => {
+                g.listQuestion.forEach((q, qIdx) => {
+                    totalQ++;
+                    const gIdx = EXAM_DATA.indexOf(g);
+                    const qKey = `q_${gIdx}_${qIdx}`;
+                    
+                    if(q.normalizedType === '0') {
+                        if(userAnswers[qKey] && q.key && userAnswers[qKey] === q.key.toUpperCase()) correctCount++;
+                    }
+                    else if(q.normalizedType === '1' || q.normalizedType === '3') {
+                        if(userAnswers[qKey] && q.fillKey && userAnswers[qKey].toLowerCase().trim() === q.fillKey.toLowerCase().trim()) correctCount++;
+                    }
+                    else if(q.normalizedType === '2' && q.plans) {
+                        // TF Grading: Must get all rows correct? Or count by rows?
+                        // Usually Moon counts by Question. Let's assume strict grading (All correct = 1 point) or partial.
+                        // Let's do simple: If all sub-answers match -> correct.
+                        const uObj = userAnswers[qKey] || {};
+                        let allCorrect = true;
+                        q.plans.forEach((p, idx) => {
+                            const isTrue = p.key == "1";
+                            if(uObj[idx] !== isTrue) allCorrect = false;
+                        });
+                        if(allCorrect) correctCount++;
+                    }
+                });
+            });
+
+            const score = (correctCount / totalQ) * 10;
+            alert(`Kết quả: ${correctCount}/${totalQ} câu đúng.
+Điểm: ${score.toFixed(2)}`);
+            
+            renderExam(false); // Re-render to show all answers and solutions
+            window.scrollTo(0,0);
+        }
+
+        function toggleMobilePalette() {
+            const el = document.getElementById('mobile-palette');
+            el.classList.toggle('hidden');
+        }
+    </script>
+</body>
+</html>
+        
