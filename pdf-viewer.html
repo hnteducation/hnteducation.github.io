@@ -13,74 +13,137 @@
 
     <style>
         /* Tùy chỉnh thanh cuộn */
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
         
         #pdf-render {
-            max-width: 100%; /* Đảm bảo không bị tràn màn hình trên điện thoại */
+            max-width: 100%;
             height: auto;
+            transition: transform 0.2s ease-in-out;
+        }
+
+        /* Ẩn input number arrows */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; 
+            margin: 0; 
         }
     </style>
 </head>
 <body class="bg-gray-200 h-screen flex flex-col font-sans overflow-hidden">
 
     <!-- Thanh công cụ (Toolbar) -->
-    <div class="bg-blue-700 text-white shadow-md z-10">
+    <div class="bg-blue-700 text-white shadow-md z-30 relative">
         <div class="container mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-2">
             
-            <!-- Logo / Tiêu đề -->
-            <div class="font-bold text-lg truncate flex items-center">
-                <i class="fa-solid fa-book-open mr-2"></i>
-                <span id="doc-title">Tài liệu học tập</span>
+            <!-- Nút bật/tắt Sidebar & Tiêu đề -->
+            <div class="flex items-center space-x-3">
+                <button id="toggle-sidebar" class="hover:bg-blue-600 p-2 rounded transition" title="Mục lục & Tìm kiếm">
+                    <i class="fa-solid fa-bars text-xl"></i>
+                </button>
+                <div class="font-bold text-lg truncate flex items-center max-w-[150px] md:max-w-xs">
+                    <i class="fa-solid fa-book-open mr-2 hidden md:block"></i>
+                    <span id="doc-title" class="truncate">Tài liệu học tập</span>
+                </div>
             </div>
 
-            <!-- Các nút lật trang -->
-            <div class="flex items-center space-x-4 bg-blue-800 px-4 py-1 rounded-full">
-                <button class="hover:text-blue-300 disabled:opacity-50" id="prev-page" title="Trang trước">
+            <!-- Các nút lật trang & Đi tới trang -->
+            <div class="flex items-center space-x-2 bg-blue-800 px-3 py-1 rounded-full">
+                <button class="hover:text-blue-300 disabled:opacity-50 px-2" id="prev-page" title="Trang trước">
                     <i class="fa-solid fa-chevron-left"></i>
                 </button>
-                <span class="text-sm">
-                    Trang <span id="page-num" class="font-bold">1</span> / <span id="page-count" class="font-bold">?</span>
-                </span>
-                <button class="hover:text-blue-300 disabled:opacity-50" id="next-page" title="Trang sau">
+                <div class="flex items-center text-sm">
+                    Trang 
+                    <input type="number" id="page-input" value="1" min="1" class="w-10 text-center mx-1 bg-white text-blue-900 font-bold rounded outline-none border border-blue-300 focus:border-yellow-400">
+                    / <span id="page-count" class="font-bold ml-1">?</span>
+                </div>
+                <button class="hover:text-blue-300 disabled:opacity-50 px-2" id="next-page" title="Trang sau">
                     <i class="fa-solid fa-chevron-right"></i>
                 </button>
             </div>
 
             <!-- Chức năng Phóng to/Thu nhỏ và Tải xuống -->
-            <div class="flex items-center space-x-3">
+            <div class="flex items-center space-x-1 md:space-x-3">
                 <button class="bg-blue-600 hover:bg-blue-500 p-2 rounded transition" id="zoom-out" title="Thu nhỏ">
                     <i class="fa-solid fa-magnifying-glass-minus"></i>
                 </button>
-                <span id="zoom-val" class="text-sm w-12 text-center">100%</span>
+                <span id="zoom-val" class="text-sm w-12 text-center hidden md:inline-block">100%</span>
                 <button class="bg-blue-600 hover:bg-blue-500 p-2 rounded transition" id="zoom-in" title="Phóng to">
                     <i class="fa-solid fa-magnifying-glass-plus"></i>
                 </button>
-                <div class="w-px h-6 bg-blue-500 mx-2"></div>
+                <div class="w-px h-6 bg-blue-500 mx-1 md:mx-2"></div>
                 <a id="download-btn" href="#" download class="bg-green-600 hover:bg-green-500 px-3 py-2 rounded text-sm font-semibold transition flex items-center">
-                    <i class="fa-solid fa-download mr-1"></i> Tải về
+                    <i class="fa-solid fa-download md:mr-1"></i> <span class="hidden md:inline">Tải về</span>
                 </a>
             </div>
         </div>
     </div>
 
-    <!-- Khu vực hiển thị thông báo lỗi (ẩn mặc định) -->
-    <div id="error-message" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative m-4" role="alert">
+    <!-- Khu vực hiển thị thông báo lỗi -->
+    <div id="error-message" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded absolute top-16 left-1/2 transform -translate-x-1/2 z-50 shadow-lg w-11/12 md:w-auto" role="alert">
         <strong class="font-bold">Lỗi!</strong>
-        <span class="block sm:inline" id="error-text">Không thể tải tài liệu. Vui lòng kiểm tra lại đường dẫn.</span>
+        <span class="block sm:inline" id="error-text">Không thể tải tài liệu.</span>
     </div>
 
-    <!-- Khu vực hiển thị PDF -->
-    <div class="flex-1 overflow-auto flex justify-center p-4 relative" id="canvas-container">
-        <!-- Vòng xoay tải dữ liệu -->
-        <div id="loading" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-blue-600">
-            <i class="fa-solid fa-circle-notch fa-spin fa-3x"></i>
-            <p class="mt-2 text-gray-600 font-semibold">Đang tải tài liệu...</p>
-        </div>
+    <!-- Bố cục chính: Sidebar + PDF Viewer -->
+    <div class="flex flex-1 overflow-hidden relative">
         
-        <canvas id="pdf-render" class="shadow-2xl bg-white hidden rounded"></canvas>
+        <!-- Sidebar (Mục lục & Tìm kiếm) -->
+        <div id="sidebar" class="bg-white w-80 flex flex-col absolute z-20 h-full transform -translate-x-full transition-transform duration-300 shadow-2xl border-r border-gray-300">
+            <!-- Tabs -->
+            <div class="flex border-b border-gray-200">
+                <button id="tab-outline" class="flex-1 py-3 font-semibold text-blue-700 border-b-2 border-blue-700 focus:outline-none transition">
+                    <i class="fa-solid fa-list-ul mr-1"></i> Mục lục
+                </button>
+                <button id="tab-search" class="flex-1 py-3 font-semibold text-gray-500 border-b-2 border-transparent hover:text-blue-700 focus:outline-none transition">
+                    <i class="fa-solid fa-search mr-1"></i> Tìm kiếm
+                </button>
+            </div>
+
+            <!-- Nội dung Tabs -->
+            <div class="flex-1 overflow-y-auto p-4 bg-gray-50">
+                
+                <!-- Tab Mục lục -->
+                <div id="content-outline" class="block">
+                    <div id="outline-container" class="text-sm">
+                        <p class="text-gray-500 italic text-center mt-4"><i class="fa-solid fa-spinner fa-spin mr-1"></i> Đang tải mục lục...</p>
+                    </div>
+                </div>
+
+                <!-- Tab Tìm kiếm -->
+                <div id="content-search" class="hidden">
+                    <div class="flex space-x-2 mb-4">
+                        <input type="text" id="search-input" placeholder="Nhập từ khóa..." class="flex-1 border border-gray-300 p-2 rounded outline-none focus:border-blue-500 text-sm" onkeypress="if(event.key === 'Enter') searchPDF()">
+                        <button onclick="searchPDF()" class="bg-blue-600 text-white px-3 py-2 rounded hover:bg-blue-700 transition">
+                            <i class="fa-solid fa-search"></i>
+                        </button>
+                    </div>
+                    <div id="search-results" class="text-sm space-y-2">
+                        <p class="text-gray-400 text-xs text-center">Nhập nội dung cần tìm để bắt đầu</p>
+                    </div>
+                </div>
+            </div>
+            <!-- Đóng sidebar trên mobile -->
+            <button id="close-sidebar-mobile" class="md:hidden absolute top-2 right-2 bg-gray-200 text-gray-700 w-8 h-8 rounded-full flex items-center justify-center">
+                <i class="fa-solid fa-times"></i>
+            </button>
+        </div>
+
+        <!-- Màn che mờ khi mở sidebar trên mobile -->
+        <div id="sidebar-overlay" class="fixed inset-0 bg-black bg-opacity-50 z-10 hidden transition-opacity"></div>
+
+        <!-- Khu vực hiển thị PDF -->
+        <div class="flex-1 overflow-auto flex justify-center p-2 md:p-6 bg-gray-200" id="canvas-container">
+            <!-- Vòng xoay tải dữ liệu -->
+            <div id="loading" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-blue-600 text-center">
+                <i class="fa-solid fa-circle-notch fa-spin fa-3x"></i>
+                <p class="mt-2 text-gray-700 font-semibold shadow-sm">Đang tải tài liệu...</p>
+            </div>
+            
+            <canvas id="pdf-render" class="shadow-2xl bg-white hidden"></canvas>
+        </div>
     </div>
 
     <script>
@@ -95,31 +158,26 @@
             canvas = document.querySelector('#pdf-render'),
             ctx = canvas.getContext('2d');
 
-        // Lấy tên file từ thanh địa chỉ URL (Ví dụ: ?file=7_hk1_bai5_tilenghich.pdf)
+        const pageInput = document.querySelector('#page-input');
+
+        // Lấy tên file từ thanh địa chỉ URL
         const urlParams = new URLSearchParams(window.location.search);
         let pdfUrl = urlParams.get('file');
 
-        // Hàm render một trang PDF cụ thể
+        // --- CÁC HÀM XỬ LÝ RENDER PDF ---
+
         const renderPage = num => {
             pageIsRendering = true;
 
-            // Lấy trang PDF
             pdfDoc.getPage(num).then(page => {
-                // Tính toán kích thước dựa trên tỷ lệ
                 const viewport = page.getViewport({ scale });
                 canvas.height = viewport.height;
                 canvas.width = viewport.width;
 
-                const renderCtx = {
-                    canvasContext: ctx,
-                    viewport: viewport
-                };
+                const renderCtx = { canvasContext: ctx, viewport: viewport };
 
-                // Vẽ trang lên Canvas
                 page.render(renderCtx).promise.then(() => {
                     pageIsRendering = false;
-
-                    // Ẩn loading, hiện canvas
                     document.getElementById('loading').style.display = 'none';
                     canvas.classList.remove('hidden');
 
@@ -129,12 +187,11 @@
                     }
                 });
 
-                // Cập nhật số trang trên UI
-                document.querySelector('#page-num').textContent = num;
+                // Cập nhật số trang
+                pageInput.value = num;
             });
         };
 
-        // Hàng đợi render để tránh lỗi khi người dùng bấm qua trang liên tục
         const queueRenderPage = num => {
             if (pageIsRendering) {
                 pageNumIsPending = num;
@@ -143,21 +200,38 @@
             }
         };
 
-        // Xem trang trước
         const showPrevPage = () => {
             if (pageNum <= 1) return;
             pageNum--;
             queueRenderPage(pageNum);
         };
 
-        // Xem trang tiếp
         const showNextPage = () => {
             if (pageNum >= pdfDoc.numPages) return;
             pageNum++;
             queueRenderPage(pageNum);
         };
 
-        // Phóng to
+        const goToPage = (e) => {
+            let num = parseInt(pageInput.value);
+            if (num > 0 && num <= pdfDoc.numPages) {
+                pageNum = num;
+                queueRenderPage(pageNum);
+            } else {
+                pageInput.value = pageNum; // Reset về trang hiện tại nếu nhập sai
+            }
+        };
+
+        // Bắt sự kiện Enter ở ô nhập trang
+        pageInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                goToPage();
+                pageInput.blur();
+            }
+        });
+        pageInput.addEventListener('blur', goToPage);
+
+        // Phóng to / Thu nhỏ
         const zoomIn = () => {
             if (scale >= 3.0) return;
             scale += 0.2;
@@ -165,7 +239,6 @@
             queueRenderPage(pageNum);
         };
 
-        // Thu nhỏ
         const zoomOut = () => {
             if (scale <= 0.6) return;
             scale -= 0.2;
@@ -173,39 +246,181 @@
             queueRenderPage(pageNum);
         };
 
-        // Bắt sự kiện các nút bấm
         document.querySelector('#prev-page').addEventListener('click', showPrevPage);
         document.querySelector('#next-page').addEventListener('click', showNextPage);
         document.querySelector('#zoom-in').addEventListener('click', zoomIn);
         document.querySelector('#zoom-out').addEventListener('click', zoomOut);
 
-        // Hàm khởi tạo tải PDF
+        // --- HÀM KHỞI TẠO TẢI TÀI LIỆU ---
         const initPDF = () => {
             if (!pdfUrl) {
                 document.getElementById('loading').style.display = 'none';
-                const errorDiv = document.getElementById('error-message');
-                errorDiv.classList.remove('hidden');
-                document.getElementById('error-text').textContent = 'Chưa chỉ định file tài liệu. Vui lòng gắn đuôi ?file=ten-file.pdf vào đường dẫn.';
+                document.getElementById('error-message').classList.remove('hidden');
+                document.getElementById('error-text').textContent = 'Chưa chỉ định file tài liệu (?file=ten-file.pdf).';
                 return;
             }
 
-            // Cập nhật nút tải xuống và tiêu đề
             document.getElementById('download-btn').href = pdfUrl;
             document.getElementById('doc-title').textContent = decodeURIComponent(pdfUrl.split('/').pop());
 
-            // Tải tài liệu PDF
             pdfjsLib.getDocument(pdfUrl).promise.then(pdfDoc_ => {
                 pdfDoc = pdfDoc_;
                 document.querySelector('#page-count').textContent = pdfDoc.numPages;
+                pageInput.max = pdfDoc.numPages;
                 renderPage(pageNum);
+                loadOutline(); // Tải mục lục
             }).catch(err => {
-                // Xử lý lỗi (ví dụ file không tồn tại)
                 document.getElementById('loading').style.display = 'none';
-                const errorDiv = document.getElementById('error-message');
-                errorDiv.classList.remove('hidden');
-                document.getElementById('error-text').textContent = 'Lỗi tải file: ' + err.message + '. Hãy chắc chắn file PDF đã được tải lên thư mục.';
+                document.getElementById('error-message').classList.remove('hidden');
+                document.getElementById('error-text').textContent = 'Lỗi tải file: ' + err.message;
             });
         };
+
+        // --- CÁC HÀM XỬ LÝ MỤC LỤC (BOOKMARKS) ---
+        async function loadOutline() {
+            try {
+                const outline = await pdfDoc.getOutline();
+                const container = document.getElementById('outline-container');
+                if (!outline || outline.length === 0) {
+                    container.innerHTML = '<p class="text-gray-500 italic text-center mt-4">Tài liệu này không có mục lục.</p>';
+                    return;
+                }
+                container.innerHTML = '';
+                container.appendChild(buildOutlineList(outline));
+            } catch(e) {
+                document.getElementById('outline-container').innerHTML = '<p class="text-red-500 text-sm">Lỗi tải mục lục.</p>';
+            }
+        }
+
+        function buildOutlineList(items, isRoot = true) {
+            const ul = document.createElement('ul');
+            ul.className = isRoot ? "space-y-2" : "pl-4 mt-1 space-y-1 border-l border-gray-200";
+            items.forEach(item => {
+                const li = document.createElement('li');
+                const a = document.createElement('a');
+                a.innerHTML = `<i class="fa-regular fa-bookmark text-blue-400 mr-1 opacity-50 text-xs"></i> ${item.title}`;
+                a.href = "#";
+                a.className = "text-gray-700 hover:text-blue-600 hover:bg-blue-50 block py-1 px-1 rounded transition duration-150";
+                
+                a.onclick = (e) => {
+                    e.preventDefault();
+                    navigateToDestination(item.dest);
+                    if(window.innerWidth < 768) toggleSidebar(); // Ẩn sidebar trên mobile sau khi click
+                };
+                
+                li.appendChild(a);
+                if (item.items && item.items.length > 0) {
+                    li.appendChild(buildOutlineList(item.items, false));
+                }
+                ul.appendChild(li);
+            });
+            return ul;
+        }
+
+        async function navigateToDestination(dest) {
+            if (typeof dest === 'string') {
+                dest = await pdfDoc.getDestination(dest);
+            }
+            if (dest && dest[0]) {
+                const pageIndex = await pdfDoc.getPageIndex(dest[0]);
+                pageNum = pageIndex + 1;
+                queueRenderPage(pageNum);
+            }
+        }
+
+        // --- CÁC HÀM XỬ LÝ TÌM KIẾM (SEARCH) ---
+        async function searchPDF() {
+            const keyword = document.getElementById('search-input').value.trim().toLowerCase();
+            const resultsContainer = document.getElementById('search-results');
+            
+            if (!keyword) {
+                resultsContainer.innerHTML = '<p class="text-gray-400 text-xs text-center">Nhập nội dung cần tìm để bắt đầu</p>';
+                return;
+            }
+
+            resultsContainer.innerHTML = '<div class="text-blue-600 text-center py-4"><i class="fa-solid fa-spinner fa-spin mr-2"></i> Đang tìm kiếm...</div>';
+
+            // Quét text từng trang (Chạy bất đồng bộ để không đứng trình duyệt)
+            const results = [];
+            for (let i = 1; i <= pdfDoc.numPages; i++) {
+                try {
+                    const page = await pdfDoc.getPage(i);
+                    const textContent = await page.getTextContent();
+                    const text = textContent.items.map(item => item.str).join(' ').toLowerCase();
+                    if (text.includes(keyword)) {
+                        results.push(i);
+                    }
+                } catch(e) { console.error("Lỗi đọc text trang " + i); }
+            }
+
+            if (results.length === 0) {
+                resultsContainer.innerHTML = '<p class="text-red-500 italic text-center p-4 bg-red-50 rounded">Không tìm thấy từ khóa này trong tài liệu.</p>';
+                return;
+            }
+
+            // Hiển thị kết quả
+            resultsContainer.innerHTML = `<div class="bg-green-100 text-green-800 px-3 py-2 rounded text-xs font-bold mb-3">Tìm thấy tại ${results.length} trang</div>`;
+            const ul = document.createElement('ul');
+            ul.className = "space-y-2";
+            
+            results.forEach(num => {
+                const li = document.createElement('li');
+                const a = document.createElement('a');
+                a.innerHTML = `<i class="fa-solid fa-file-lines text-gray-400 mr-2"></i> Kết quả ở <b>Trang ${num}</b>`;
+                a.href = "#";
+                a.className = "flex items-center p-2 hover:bg-blue-50 text-gray-700 hover:text-blue-700 rounded transition border border-gray-100 shadow-sm";
+                a.onclick = (e) => {
+                    e.preventDefault();
+                    pageNum = num;
+                    queueRenderPage(pageNum);
+                    if(window.innerWidth < 768) toggleSidebar(); // Ẩn sidebar trên mobile
+                };
+                li.appendChild(a);
+                ul.appendChild(li);
+            });
+            resultsContainer.appendChild(ul);
+        }
+
+        // --- UI GIAO DIỆN (SIDEBAR & TABS) ---
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        let isSidebarOpen = false;
+
+        const toggleSidebar = () => {
+            isSidebarOpen = !isSidebarOpen;
+            if (isSidebarOpen) {
+                sidebar.classList.remove('-translate-x-full');
+                overlay.classList.remove('hidden');
+            } else {
+                sidebar.classList.add('-translate-x-full');
+                overlay.classList.add('hidden');
+            }
+        };
+
+        document.getElementById('toggle-sidebar').addEventListener('click', toggleSidebar);
+        document.getElementById('close-sidebar-mobile').addEventListener('click', toggleSidebar);
+        overlay.addEventListener('click', toggleSidebar);
+
+        // Chuyển Tab Mục lục / Tìm kiếm
+        const tabOutlineBtn = document.getElementById('tab-outline');
+        const tabSearchBtn = document.getElementById('tab-search');
+        const contentOutline = document.getElementById('content-outline');
+        const contentSearch = document.getElementById('content-search');
+
+        tabOutlineBtn.addEventListener('click', () => {
+            tabOutlineBtn.className = "flex-1 py-3 font-semibold text-blue-700 border-b-2 border-blue-700 focus:outline-none transition";
+            tabSearchBtn.className = "flex-1 py-3 font-semibold text-gray-500 border-b-2 border-transparent hover:text-blue-700 focus:outline-none transition";
+            contentOutline.classList.remove('hidden');
+            contentSearch.classList.add('hidden');
+        });
+
+        tabSearchBtn.addEventListener('click', () => {
+            tabSearchBtn.className = "flex-1 py-3 font-semibold text-blue-700 border-b-2 border-blue-700 focus:outline-none transition";
+            tabOutlineBtn.className = "flex-1 py-3 font-semibold text-gray-500 border-b-2 border-transparent hover:text-blue-700 focus:outline-none transition";
+            contentSearch.classList.remove('hidden');
+            contentOutline.classList.add('hidden');
+            document.getElementById('search-input').focus();
+        });
 
         // Khởi chạy
         initPDF();
