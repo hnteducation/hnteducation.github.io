@@ -4,211 +4,101 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hệ thống Đọc tài liệu - Dạy Toán Thầy Hoàng</title>
-    <!-- Tích hợp Tailwind CSS để làm đẹp giao diện -->
+    <!-- Tailwind CSS cho giao diện -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Tích hợp FontAwesome cho các icon -->
+    <!-- FontAwesome cho icon -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Tích hợp thư viện PDF.js -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-
-    <style>
-        /* Tùy chỉnh thanh cuộn */
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: #f1f1f1; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-        
-        #pdf-render {
-            max-width: 100%; /* Đảm bảo không bị tràn màn hình trên điện thoại */
-            height: auto;
-        }
-    </style>
 </head>
-<body class="bg-gray-200 h-screen flex flex-col font-sans overflow-hidden">
+<body class="bg-gray-800 h-screen flex flex-col font-sans overflow-hidden">
 
-    <!-- Thanh công cụ (Toolbar) -->
-    <div class="bg-blue-700 text-white shadow-md z-10">
-        <div class="container mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-2">
-            
-            <!-- Logo / Tiêu đề -->
-            <div class="font-bold text-lg truncate flex items-center">
-                <i class="fa-solid fa-book-open mr-2"></i>
-                <span id="doc-title">Tài liệu học tập</span>
-            </div>
-
-            <!-- Các nút lật trang -->
-            <div class="flex items-center space-x-4 bg-blue-800 px-4 py-1 rounded-full">
-                <button class="hover:text-blue-300 disabled:opacity-50" id="prev-page" title="Trang trước">
-                    <i class="fa-solid fa-chevron-left"></i>
-                </button>
-                <span class="text-sm">
-                    Trang <span id="page-num" class="font-bold">1</span> / <span id="page-count" class="font-bold">?</span>
-                </span>
-                <button class="hover:text-blue-300 disabled:opacity-50" id="next-page" title="Trang sau">
-                    <i class="fa-solid fa-chevron-right"></i>
-                </button>
-            </div>
-
-            <!-- Chức năng Phóng to/Thu nhỏ và Tải xuống -->
-            <div class="flex items-center space-x-3">
-                <button class="bg-blue-600 hover:bg-blue-500 p-2 rounded transition" id="zoom-out" title="Thu nhỏ">
-                    <i class="fa-solid fa-magnifying-glass-minus"></i>
-                </button>
-                <span id="zoom-val" class="text-sm w-12 text-center">100%</span>
-                <button class="bg-blue-600 hover:bg-blue-500 p-2 rounded transition" id="zoom-in" title="Phóng to">
-                    <i class="fa-solid fa-magnifying-glass-plus"></i>
-                </button>
-                <div class="w-px h-6 bg-blue-500 mx-2"></div>
-                <a id="download-btn" href="#" download class="bg-green-600 hover:bg-green-500 px-3 py-2 rounded text-sm font-semibold transition flex items-center">
-                    <i class="fa-solid fa-download mr-1"></i> Tải về
-                </a>
-            </div>
+    <!-- Thanh công cụ (Toolbar) cố định ở trên -->
+    <div class="bg-gray-900 text-white shadow-md p-3 flex justify-between items-center z-20 border-b border-gray-700">
+        <!-- Tiêu đề file -->
+        <div class="font-bold text-lg truncate flex items-center max-w-[55%] md:max-w-[70%]">
+            <i class="fa-solid fa-file-pdf text-red-500 mr-2 text-xl"></i>
+            <span id="doc-title" class="truncate text-gray-200">Đang tải tài liệu...</span>
+        </div>
+        
+        <!-- Các nút tiện ích -->
+        <div class="flex items-center space-x-2 md:space-x-4">
+            <a id="open-btn" href="#" target="_blank" class="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded text-sm font-semibold transition flex items-center" title="Mở sang Tab mới để xem toàn màn hình">
+                <i class="fa-solid fa-arrow-up-right-from-square md:mr-2"></i> 
+                <span class="hidden md:inline">Mở rộng</span>
+            </a>
+            <a id="download-btn" href="#" download class="bg-green-600 hover:bg-green-500 px-3 py-2 rounded text-sm font-semibold transition flex items-center" title="Tải file về máy">
+                <i class="fa-solid fa-download md:mr-2"></i> 
+                <span class="hidden md:inline">Tải về</span>
+            </a>
         </div>
     </div>
 
-    <!-- Khu vực hiển thị thông báo lỗi (ẩn mặc định) -->
-    <div id="error-message" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative m-4" role="alert">
-        <strong class="font-bold">Lỗi!</strong>
-        <span class="block sm:inline" id="error-text">Không thể tải tài liệu. Vui lòng kiểm tra lại đường dẫn.</span>
+    <!-- Thanh thông báo nhỏ dành riêng cho thiết bị di động -->
+    <div id="mobile-notice" class="hidden bg-yellow-100 border-b border-yellow-200 text-yellow-800 text-xs md:text-sm text-center py-1.5 px-2 z-10 shadow-sm">
+        <i class="fa-solid fa-mobile-screen mr-1"></i> Đang hiển thị qua trình xem của Google. Nếu bị lỗi trắng màn hình, hãy bấm nút <b>"Mở rộng"</b> ở góc trên.
     </div>
 
     <!-- Khu vực hiển thị PDF -->
-    <div class="flex-1 overflow-auto flex justify-center p-4 relative" id="canvas-container">
+    <div id="viewer-container" class="flex-1 w-full relative bg-gray-600 flex justify-center items-center">
         <!-- Vòng xoay tải dữ liệu -->
-        <div id="loading" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-blue-600">
-            <i class="fa-solid fa-circle-notch fa-spin fa-3x"></i>
-            <p class="mt-2 text-gray-600 font-semibold">Đang tải tài liệu...</p>
+        <div id="loading" class="absolute text-white text-center z-0">
+            <i class="fa-solid fa-circle-notch fa-spin fa-3x mb-3 text-blue-400"></i>
+            <p class="font-medium text-gray-300">Đang xử lý tài liệu...</p>
         </div>
-        
-        <canvas id="pdf-render" class="shadow-2xl bg-white hidden rounded"></canvas>
     </div>
 
     <script>
-        // Cấu hình Worker cho PDF.js
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
-
-        let pdfDoc = null,
-            pageNum = 1,
-            pageIsRendering = false,
-            pageNumIsPending = null,
-            scale = 1.2, // Tỷ lệ phóng mặc định
-            canvas = document.querySelector('#pdf-render'),
-            ctx = canvas.getContext('2d');
-
-        // Lấy tên file từ thanh địa chỉ URL (Ví dụ: ?file=7_hk1_bai5_tilenghich.pdf)
+        // Lấy tên file từ thanh URL (Ví dụ: pdf-viewer.html?file=tailieu.pdf)
         const urlParams = new URLSearchParams(window.location.search);
         let pdfUrl = urlParams.get('file');
 
-        // Hàm render một trang PDF cụ thể
-        const renderPage = num => {
-            pageIsRendering = true;
+        if (!pdfUrl) {
+            // Nếu không có link PDF
+            document.getElementById('loading').innerHTML = `
+                <div class="text-red-400 bg-gray-800 p-6 rounded-lg shadow-lg border border-red-500">
+                    <i class="fa-solid fa-triangle-exclamation fa-3x mb-3"></i>
+                    <p class="font-bold text-lg">Lỗi: Chưa cung cấp link file PDF</p>
+                    <p class="text-sm mt-2 text-gray-300">Vui lòng gắn đuôi ?file=ten-file.pdf vào đường dẫn.</p>
+                </div>`;
+        } else {
+            // Trích xuất tên file và hiển thị lên giao diện
+            let fileName = pdfUrl.split('/').pop();
+            try { fileName = decodeURIComponent(fileName); } catch(e) {}
+            document.getElementById('doc-title').textContent = fileName;
 
-            // Lấy trang PDF
-            pdfDoc.getPage(num).then(page => {
-                // Tính toán kích thước dựa trên tỷ lệ
-                const viewport = page.getViewport({ scale });
-                canvas.height = viewport.height;
-                canvas.width = viewport.width;
-
-                const renderCtx = {
-                    canvasContext: ctx,
-                    viewport: viewport
-                };
-
-                // Vẽ trang lên Canvas
-                page.render(renderCtx).promise.then(() => {
-                    pageIsRendering = false;
-
-                    // Ẩn loading, hiện canvas
-                    document.getElementById('loading').style.display = 'none';
-                    canvas.classList.remove('hidden');
-
-                    if (pageNumIsPending !== null) {
-                        renderPage(pageNumIsPending);
-                        pageNumIsPending = null;
-                    }
-                });
-
-                // Cập nhật số trang trên UI
-                document.querySelector('#page-num').textContent = num;
-            });
-        };
-
-        // Hàng đợi render để tránh lỗi khi người dùng bấm qua trang liên tục
-        const queueRenderPage = num => {
-            if (pageIsRendering) {
-                pageNumIsPending = num;
-            } else {
-                renderPage(num);
-            }
-        };
-
-        // Xem trang trước
-        const showPrevPage = () => {
-            if (pageNum <= 1) return;
-            pageNum--;
-            queueRenderPage(pageNum);
-        };
-
-        // Xem trang tiếp
-        const showNextPage = () => {
-            if (pageNum >= pdfDoc.numPages) return;
-            pageNum++;
-            queueRenderPage(pageNum);
-        };
-
-        // Phóng to
-        const zoomIn = () => {
-            if (scale >= 3.0) return;
-            scale += 0.2;
-            document.querySelector('#zoom-val').textContent = Math.round(scale * 100) + '%';
-            queueRenderPage(pageNum);
-        };
-
-        // Thu nhỏ
-        const zoomOut = () => {
-            if (scale <= 0.6) return;
-            scale -= 0.2;
-            document.querySelector('#zoom-val').textContent = Math.round(scale * 100) + '%';
-            queueRenderPage(pageNum);
-        };
-
-        // Bắt sự kiện các nút bấm
-        document.querySelector('#prev-page').addEventListener('click', showPrevPage);
-        document.querySelector('#next-page').addEventListener('click', showNextPage);
-        document.querySelector('#zoom-in').addEventListener('click', zoomIn);
-        document.querySelector('#zoom-out').addEventListener('click', zoomOut);
-
-        // Hàm khởi tạo tải PDF
-        const initPDF = () => {
-            if (!pdfUrl) {
-                document.getElementById('loading').style.display = 'none';
-                const errorDiv = document.getElementById('error-message');
-                errorDiv.classList.remove('hidden');
-                document.getElementById('error-text').textContent = 'Chưa chỉ định file tài liệu. Vui lòng gắn đuôi ?file=ten-file.pdf vào đường dẫn.';
-                return;
-            }
-
-            // Cập nhật nút tải xuống và tiêu đề
+            // Gắn link cho các nút tải về / mở rộng
             document.getElementById('download-btn').href = pdfUrl;
-            document.getElementById('doc-title').textContent = decodeURIComponent(pdfUrl.split('/').pop());
+            document.getElementById('open-btn').href = pdfUrl;
 
-            // Tải tài liệu PDF
-            pdfjsLib.getDocument(pdfUrl).promise.then(pdfDoc_ => {
-                pdfDoc = pdfDoc_;
-                document.querySelector('#page-count').textContent = pdfDoc.numPages;
-                renderPage(pageNum);
-            }).catch(err => {
-                // Xử lý lỗi (ví dụ file không tồn tại)
+            // Kiểm tra xem người dùng đang dùng điện thoại hay máy tính
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            
+            // Xây dựng iframe hiển thị
+            const container = document.getElementById('viewer-container');
+            const iframe = document.createElement('iframe');
+            iframe.className = "w-full h-full border-none absolute top-0 left-0 z-10 bg-gray-200";
+            iframe.setAttribute('allowfullscreen', 'true');
+
+            // Ẩn chữ "Đang xử lý..." khi iframe tải xong
+            iframe.onload = function() {
                 document.getElementById('loading').style.display = 'none';
-                const errorDiv = document.getElementById('error-message');
-                errorDiv.classList.remove('hidden');
-                document.getElementById('error-text').textContent = 'Lỗi tải file: ' + err.message + '. Hãy chắc chắn file PDF đã được tải lên thư mục.';
-            });
-        };
+            };
 
-        // Khởi chạy
-        initPDF();
+            if (isMobile) {
+                // ĐIỆN THOẠI: Dùng Google Drive Viewer
+                // Google Docs Viewer yêu cầu phải có một đường dẫn tuyệt đối (bắt đầu bằng https://...)
+                const absoluteUrl = new URL(pdfUrl, window.location.href).href;
+                
+                document.getElementById('mobile-notice').classList.remove('hidden');
+                iframe.src = `https://docs.google.com/gview?url=${encodeURIComponent(absoluteUrl)}&embedded=true`;
+            } else {
+                // MÁY TÍNH: Dùng trình xem gốc của Chrome/Edge (Hiển thị nét 100%, có sẵn bookmark, tìm kiếm nội bộ, in ấn...)
+                // Thêm #toolbar=1 để kích hoạt thanh công cụ của trình duyệt
+                iframe.src = `${pdfUrl}#toolbar=1&navpanes=1&scrollbar=1&view=FitH`;
+            }
+
+            // Nhúng iframe vào HTML
+            container.appendChild(iframe);
+        }
     </script>
 </body>
 </html>
