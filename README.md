@@ -14,6 +14,4 @@ Nhằm tuân thủ nghiêm túc các quy định pháp luật Việt Nam (Luật
 - Nếu các số liệu mô phỏng kỹ thuật của chúng tôi vô tình trùng hợp hoặc gây hiểu lầm với các sự kiện tuyển sinh thực tế, chúng tôi sẵn sàng tiếp thu và điều chỉnh.
 
 ### 3. Cơ chế gỡ bỏ và Đính chính thông tin khẩn cấp
-Nếu cơ quan quản lý, tổ chức, hoặc cá nhân có thẩm quyền phát hiện bất kỳ nội dung nào trên trang web này có nguy cơ gây hiểu lầm, vi phạm bản quyền hoặc ảnh hưởng không tốt đến trật tự xã hội, xin vui lòng gửi phản hồi trực tiếp cho chúng tôi qua các kênh dưới đây. Chúng tôi cam kết sẽ **tiến hành gỡ bỏ, ẩn trang hoặc đính chính thông tin trong vòng 24 giờ**:
-- **Email tiếp nhận:** [Điền email của bạn ở đây]
-- **Kênh báo lỗi (Issue Tracker):** [Điền link Issue của GitHub hoặc Form liên hệ của bạn]
+Nếu cơ quan quản lý, tổ chức, hoặc cá nhân có thẩm quyền phát hiện bất kỳ nội dung nào trên trang web này có nguy cơ gây hiểu lầm, vi phạm bản quyền hoặc ảnh hưởng không tốt đến trật tự xã hội, xin vui lòng gửi phản hồi trực tiếp cho chúng tôi. Chúng tôi cam kết sẽ **tiến hành gỡ bỏ, ẩn trang hoặc đính chính thông tin trong vòng 24 giờ**:
