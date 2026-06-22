@@ -5,7 +5,7 @@ Kho lưu trữ mã nguồn và trang web này (hnteducation.github.io) được 
 Nhằm tuân thủ nghiêm túc các quy định pháp luật Việt Nam (Luật An ninh mạng 2018, Nghị định 72/2013/NĐ-CP, và các quy định về quản lý thông tin trên mạng Internet), chúng tôi cam kết và làm rõ các điều khoản bắt buộc đối với người xem như sau:
 
 ### 1. Bản chất của dữ liệu thống kê, phổ điểm chia sẻ
-- **D dữ liệu thử nghiệm/giả định:** Tất cả các bảng số liệu, biểu đồ phổ điểm, phân tích khu vực (đặc biệt là các trang liên quan đến Thống kê Phổ điểm Tuyển sinh Lớp 10) xuất hiện trong kho mã nguồn hoặc trang hiển thị **hoàn toàn là dữ liệu giả định/mô phỏng toán học**.
+- **Dữ liệu thử nghiệm/giả định:** Tất cả các bảng số liệu, biểu đồ phổ điểm, phân tích khu vực (đặc biệt là các trang liên quan đến Thống kê Phổ điểm Tuyển sinh Lớp 10) xuất hiện trong kho mã nguồn hoặc trang hiển thị **hoàn toàn là dữ liệu giả định/mô phỏng toán học**.
 - **Không có giá trị pháp lý:** Các dữ liệu này được khởi tạo ngẫu nhiên để kiểm tra hiệu năng tải giao diện, kiểm tra tính toán biểu đồ của mã nguồn (HTML/JS) và **hoàn toàn không phải** dữ liệu, kết quả chính thức từ Bộ Giáo dục và Đào tạo, Sở Giáo dục và Đào tạo TPHCM hay bất kỳ cơ quan quản lý giáo dục nào.
 - **Khuyến cáo người dùng:** Người xem tuyệt đối không sử dụng các thông tin giả định này để làm cơ sở dự đoán điểm chuẩn, xét tuyển, hoặc chia sẻ lại lên các phương tiện truyền thông như một nguồn tin xác thực. Chúng tôi không chịu bất kỳ trách nhiệm nào đối với những thiệt hại, hiểu lầm phát sinh từ việc người dùng hiểu sai mục đích thử nghiệm của trang web.
 
