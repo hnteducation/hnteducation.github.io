@@ -118,18 +118,27 @@
                     </div>
                 </div>
 
-                <!-- TABS NAVIGATION -->
-                <nav class="flex space-x-1 bg-slate-100 p-1 rounded-xl text-xs font-semibold" id="nav-tabs">
-                    <button onclick="switchTab('quick-input')" id="tab-btn-quick-input" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition text-brand-900 bg-white shadow-sm">
-                        <i class="fa-solid fa-credit-card text-brand-500"></i><span class="hidden md:inline">Thu</span> Học Phí
+                <!-- TABS NAVIGATION & SYNC BUTTON -->
+                <div class="flex items-center gap-2">
+                    <nav class="flex space-x-1 bg-slate-100 p-1 rounded-xl text-xs font-semibold" id="nav-tabs">
+                        <button onclick="switchTab('quick-input')" id="tab-btn-quick-input" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition text-brand-900 bg-white shadow-sm">
+                            <i class="fa-solid fa-credit-card text-brand-500"></i><span class="hidden md:inline">Thu</span> Học Phí
+                        </button>
+                        <button onclick="switchTab('students-admin')" id="tab-btn-students-admin" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition text-slate-600 hover:text-slate-900">
+                            <i class="fa-solid fa-graduation-cap"></i> Admin Portal
+                        </button>
+                        <button onclick="switchTab('settings')" id="tab-btn-settings" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition text-slate-600 hover:text-slate-900">
+                            <i class="fa-solid fa-gear"></i> Cấu Hinh
+                        </button>
+                    </nav>
+                    
+                    <button onclick="fetchDataFromServer()" id="sync-btn" 
+                            class="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold p-2.5 rounded-xl text-xs transition flex items-center gap-1 shadow-2xs"
+                            title="Đồng bộ dữ liệu từ Google Sheets">
+                        <i class="fa-solid fa-arrows-rotate text-brand-500" id="sync-icon"></i>
+                        <span class="hidden sm:inline">Đồng bộ</span>
                     </button>
-                    <button onclick="switchTab('students-admin')" id="tab-btn-students-admin" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition text-slate-600 hover:text-slate-900">
-                        <i class="fa-solid fa-graduation-cap"></i> Admin Portal
-                    </button>
-                    <button onclick="switchTab('settings')" id="tab-btn-settings" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition text-slate-600 hover:text-slate-900">
-                        <i class="fa-solid fa-gear"></i> Cấu Hinh
-                    </button>
-                </nav>
+                </div>
             </div>
         </header>
 
@@ -905,11 +914,10 @@
             document.getElementById('settings-troubleshoot').classList.add('hidden');
             
             try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    mode: 'cors',
-                    headers: { 'Content-Type': 'text/plain' },
-                    body: JSON.stringify({ passcode: passcode, action: 'login' })
+                const checkUrl = `${url}?passcode=${encodeURIComponent(passcode)}&action=login`;
+                const response = await fetch(checkUrl, {
+                    method: 'GET',
+                    mode: 'cors'
                 });
                 
                 const result = await response.json();
@@ -938,16 +946,18 @@
             }
         }
 
-        // TẢI TOÀN BỘ DỮ LIỆU TỪ GOOGLE SHEET
+        // TẢI TOÀN BỘ DỮ LIỆU TỪ GOOGLE SHEET (Sử dụng GET cực kỳ ổn định chống lỗi redirect)
         async function fetchDataFromServer() {
             if (!isConfigured()) return;
             
+            const syncIcon = document.getElementById('sync-icon');
+            if (syncIcon) syncIcon.classList.add('animate-spin');
+            
             try {
-                const response = await fetch(state.config.apiUrl, {
-                    method: 'POST',
-                    mode: 'cors',
-                    headers: { 'Content-Type': 'text/plain' },
-                    body: JSON.stringify({ passcode: state.config.passcode, action: 'getData' })
+                const getUrl = `${state.config.apiUrl}?passcode=${encodeURIComponent(state.config.passcode)}&action=getData`;
+                const response = await fetch(getUrl, {
+                    method: 'GET',
+                    mode: 'cors'
                 });
                 
                 const result = await response.json();
@@ -970,6 +980,12 @@
                 console.error(err);
                 updateConnectionStatusBar(false, 'Kết nối đến Google Sheets bị gián đoạn.');
                 showToast('warning', 'Mất kết nối API', 'Đang hiển thị dữ liệu lưu trữ tạm thời.');
+            } finally {
+                if (syncIcon) {
+                    setTimeout(() => {
+                        syncIcon.classList.remove('animate-spin');
+                    }, 500);
+                }
             }
         }
 
@@ -988,10 +1004,6 @@
             document.getElementById(`tab-${tabId}`).classList.remove('hidden');
             const activeBtn = document.getElementById(`tab-btn-${tabId}`);
             activeBtn.className = 'px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition text-brand-900 bg-white shadow-sm';
-            
-            if ((tabId === 'quick-input' || tabId === 'students-admin') && isConfigured()) {
-                fetchDataFromServer();
-            }
         }
 
         // CHUYỂN TAB CON TRONG ADMIN PORTAL
