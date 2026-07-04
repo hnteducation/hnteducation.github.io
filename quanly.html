@@ -18,6 +18,11 @@
     <!-- Font Awesome Icons -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 
+    <!-- Flatpickr Datepicker CSS & JS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/vn.js"></script>
+
     <!-- Cấu hình Tailwind màu tùy chỉnh -->
     <script>
         tailwind.config = {
@@ -209,7 +214,7 @@
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
                                     <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Ngày đóng tiền</label>
-                                    <input type="date" id="qp-payment-date" 
+                                    <input type="text" id="qp-payment-date" placeholder="Chọn ngày..." 
                                            class="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 font-medium">
                                 </div>
                                 <div>
@@ -219,22 +224,21 @@
                                         <option value="Tiền mặt">Tiền mặt</option>
                                     </select>
                                 </div>
-                            </div>
+                             </div>
 
-                            <!-- Chu kỳ tính học phí -->
-                            <div class="grid grid-cols-2 gap-3">
+                             <!-- Chu kỳ tính học phí -->
+                             <div class="grid grid-cols-2 gap-3">
                                 <div>
                                     <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Bắt đầu chu kỳ</label>
-                                    <input type="date" id="qp-period-start" 
-                                           class="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition font-medium"
-                                           onchange="autoCalculatePeriodEnd()">
+                                    <input type="text" id="qp-period-start" placeholder="Chọn ngày..." 
+                                           class="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition font-medium">
                                 </div>
                                 <div>
                                     <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Kết thúc chu kỳ</label>
-                                    <input type="date" id="qp-period-end" 
+                                    <input type="text" id="qp-period-end" placeholder="Chọn ngày..." 
                                            class="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition font-medium">
                                 </div>
-                            </div>
+                             </div>
 
                             <!-- Ghi chú -->
                             <div>
@@ -617,7 +621,7 @@
                     </div>
                     <div>
                         <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Ngày sinh (Không bắt buộc)</label>
-                        <input type="date" id="sm-birth-date" 
+                        <input type="text" id="sm-birth-date" placeholder="Chọn ngày sinh..." 
                                class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium">
                     </div>
                     <div>
@@ -689,7 +693,7 @@
                     </div>
                     <div>
                         <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Ngày bắt đầu nhập học <span class="text-red-500">*</span></label>
-                        <input type="date" id="sm-registration-date" required
+                        <input type="text" id="sm-registration-date" required placeholder="Chọn ngày nhập học..." 
                                class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium">
                     </div>
                 </div>
@@ -853,9 +857,59 @@
             restoreData: null
         };
 
+        let datePickers = {};
+
+        // KHỞI TẠO BỘ CHỌN NGÀY FLATPICKR TIẾNG VIỆT
+        function initDatePickers() {
+            const config = {
+                dateFormat: "Y-m-d",
+                altInput: true,
+                altFormat: "d/m/Y",
+                locale: "vn",
+                allowInput: true
+            };
+            
+            datePickers.paymentDate = flatpickr("#qp-payment-date", config);
+            datePickers.periodStart = flatpickr("#qp-period-start", {
+                ...config,
+                onChange: function() {
+                    autoCalculatePeriodEnd();
+                }
+            });
+            datePickers.periodEnd = flatpickr("#qp-period-end", config);
+            datePickers.birthDate = flatpickr("#sm-birth-date", config);
+            datePickers.regDate = flatpickr("#sm-registration-date", config);
+        }
+
+        // Cập nhật giá trị cho input (tự động cập nhật giao diện Flatpickr nếu có)
+        function setInputValue(id, value) {
+            const input = document.getElementById(id);
+            if (!input) return;
+            if (input._flatpickr) {
+                input._flatpickr.setDate(value);
+            } else {
+                input.value = value;
+            }
+        }
+
+        // Gửi request an toàn tới Apps Script API (sử dụng POST đồng nhất để tránh timeout của GET)
+        async function safeFetch(action, payload = {}) {
+            const url = state.config.apiUrl;
+            const passcode = state.config.passcode;
+            
+            const response = await fetch(url, {
+                method: 'POST',
+                mode: 'cors',
+                headers: { 'Content-Type': 'text/plain' },
+                body: JSON.stringify({ passcode, action, ...payload })
+            });
+            return await response.json();
+        }
+
         // KHI TRANG WEB KHỞI ĐỘNG
         window.addEventListener('DOMContentLoaded', () => {
             loadConfigFromLocalStorage();
+            initDatePickers();
             resetQuickPaymentDates();
             
             if (isConfigured()) {
@@ -913,20 +967,16 @@
             showLoader('Đang kết nối...', 'Kiểm tra thông tin kết nối tới API Google Sheets');
             document.getElementById('settings-troubleshoot').classList.add('hidden');
             
+            // Gán tạm thời cấu hình để safeFetch chạy kiểm tra
+            state.config.apiUrl = url;
+            state.config.passcode = passcode;
+            
             try {
-                const checkUrl = `${url}?passcode=${encodeURIComponent(passcode)}&action=login`;
-                const response = await fetch(checkUrl, {
-                    method: 'GET',
-                    mode: 'cors'
-                });
-                
-                const result = await response.json();
+                const result = await safeFetch('login');
                 
                 if (result.success) {
                     localStorage.setItem('hnt_api_url', url);
                     localStorage.setItem('hnt_passcode', passcode);
-                    state.config.apiUrl = url;
-                    state.config.passcode = passcode;
                     
                     showToast('success', 'Kết nối thành công!', 'API đã hoạt động bình thường.');
                     updateConnectionStatusBar(true, 'Đã kết nối với API Google Sheets.');
@@ -946,7 +996,7 @@
             }
         }
 
-        // TẢI TOÀN BỘ DỮ LIỆU TỪ GOOGLE SHEET (Sử dụng GET cực kỳ ổn định chống lỗi redirect)
+        // TẢI TOÀN BỘ DỮ LIỆU TỪ GOOGLE SHEET (Sử dụng safeFetch tự phục hồi)
         async function fetchDataFromServer() {
             if (!isConfigured()) return;
             
@@ -954,13 +1004,7 @@
             if (syncIcon) syncIcon.classList.add('animate-spin');
             
             try {
-                const getUrl = `${state.config.apiUrl}?passcode=${encodeURIComponent(state.config.passcode)}&action=getData`;
-                const response = await fetch(getUrl, {
-                    method: 'GET',
-                    mode: 'cors'
-                });
-                
-                const result = await response.json();
+                const result = await safeFetch('getData');
                 
                 if (result.success) {
                     state.students = result.students || [];
@@ -1078,9 +1122,9 @@
             const nextMonth = new Date();
             nextMonth.setMonth(today.getMonth() + 1);
             
-            document.getElementById('qp-payment-date').value = ensureYYYYMMDD(today);
-            document.getElementById('qp-period-start').value = ensureYYYYMMDD(today);
-            document.getElementById('qp-period-end').value = ensureYYYYMMDD(nextMonth);
+            setInputValue('qp-payment-date', ensureYYYYMMDD(today));
+            setInputValue('qp-period-start', ensureYYYYMMDD(today));
+            setInputValue('qp-period-end', ensureYYYYMMDD(nextMonth));
             document.getElementById('qp-note').value = `Đóng học phí tháng ${today.getMonth() + 1}`;
         }
 
@@ -1093,7 +1137,7 @@
             const endDate = new Date(startDate);
             endDate.setMonth(startDate.getMonth() + 1);
             
-            document.getElementById('qp-period-end').value = ensureYYYYMMDD(endDate);
+            setInputValue('qp-period-end', ensureYYYYMMDD(endDate));
         }
 
         // Định dạng tiền tệ VND tự động khi gõ
@@ -1260,7 +1304,7 @@
             }
             
             // Tự tính kỳ đóng tiền gợi ý tiếp theo
-            document.getElementById('qp-period-start').value = ensureYYYYMMDD(startPeriod);
+            setInputValue('qp-period-start', ensureYYYYMMDD(startPeriod));
             autoCalculatePeriodEnd();
             
             // Đổ ghi chú mặc định gợi ý
@@ -1386,27 +1430,18 @@
             showLoader('Đang cập nhật...', 'Đang gửi dữ liệu thu học phí lên Google Sheets API');
             
             try {
-                const response = await fetch(state.config.apiUrl, {
-                    method: 'POST',
-                    mode: 'cors',
-                    headers: { 'Content-Type': 'text/plain' },
-                    body: JSON.stringify({
-                        passcode: state.config.passcode,
-                        action: 'addPayment',
-                        paymentData: {
-                            student_id: studentId,
-                            student_name: studentName,
-                            amount: amount,
-                            payment_date: paymentDate,
-                            period_start: periodStart,
-                            period_end: periodEnd,
-                            payment_method: paymentMethod,
-                            note: note
-                        }
-                    })
+                const result = await safeFetch('addPayment', {
+                    paymentData: {
+                        student_id: studentId,
+                        student_name: studentName,
+                        amount: amount,
+                        payment_date: paymentDate,
+                        period_start: periodStart,
+                        period_end: periodEnd,
+                        payment_method: paymentMethod,
+                        note: note
+                    }
                 });
-                
-                const result = await response.json();
                 
                 if (result.success) {
                     showToast('success', 'Thu học phí thành công!', `Đã ghi nhận thu ${amount.toLocaleString('vi-VN')}đ cho học sinh ${studentName}.`);
@@ -1704,7 +1739,7 @@
                 });
             }
             if (gradeVal) {
-                filtered = filtered.filter(s => s.grade.toString() === gradeVal);
+                filtered = filtered.filter(s => s.grade && s.grade.toString() === gradeVal);
             }
             if (statusVal) {
                 filtered = filtered.filter(s => s.status === statusVal);
@@ -1716,7 +1751,11 @@
                 });
             }
             
-            filtered.sort((a, b) => b.id.toString().localeCompare(a.id.toString()));
+            filtered.sort((a, b) => {
+                const idA = a.id ? a.id.toString() : '';
+                const idB = b.id ? b.id.toString() : '';
+                return idB.localeCompare(idA);
+            });
             
             tbody.innerHTML = '';
             document.getElementById('table-showing-text').textContent = `Hiển thị ${filtered.length} / ${state.students.length} học sinh`;
@@ -1746,7 +1785,8 @@
                 let sessionTags = '';
                 if (s.campuses_sessions) {
                     try {
-                        const sessions = s.campuses_sessions.startsWith('[') ? JSON.parse(s.campuses_sessions) : s.campuses_sessions.split(',');
+                        const sessionStr = s.campuses_sessions.toString().trim();
+                        const sessions = sessionStr.startsWith('[') ? JSON.parse(sessionStr) : sessionStr.split(',');
                         sessions.forEach(ses => {
                             if (!ses || ses.trim() === '') return;
                             const displayName = getFriendlySessionName(ses.trim());
@@ -1754,10 +1794,7 @@
                             sessionTags += `<span class="inline-block text-[9px] font-bold px-1 py-0.5 rounded border mr-1 mb-1 ${colorClass}">${escapeHtml(displayName)}</span>`;
                         });
                     } catch (e) {
-                        s.campuses_sessions.split(',').forEach(ses => {
-                            if (!ses || ses.trim() === '') return;
-                            sessionTags += `<span class="inline-block text-[9px] font-bold px-1 py-0.5 bg-slate-100 border text-slate-600 rounded mr-1 mb-1">${escapeHtml(ses.trim())}</span>`;
-                        });
+                        console.error("Lỗi parse campuses_sessions: ", e);
                     }
                 }
                 
@@ -1862,7 +1899,8 @@
             state.students.forEach(s => {
                 if (s.campuses_sessions) {
                     try {
-                        const sessions = s.campuses_sessions.startsWith('[') ? JSON.parse(s.campuses_sessions) : s.campuses_sessions.split(',');
+                        const sessionStr = s.campuses_sessions.toString().trim();
+                        const sessions = sessionStr.startsWith('[') ? JSON.parse(sessionStr) : sessionStr.split(',');
                         sessions.forEach(ses => {
                             if (ses && ses.trim() !== '') {
                                 allSessions.add(ses.trim());
@@ -1904,10 +1942,11 @@
             const classStudents = state.students.filter(s => {
                 if (s.status !== 'Đang học' || !s.campuses_sessions) return false;
                 try {
-                    const sessions = s.campuses_sessions.startsWith('[') ? JSON.parse(s.campuses_sessions) : s.campuses_sessions.split(',');
+                    const sessionStr = s.campuses_sessions.toString().trim();
+                    const sessions = sessionStr.startsWith('[') ? JSON.parse(sessionStr) : sessionStr.split(',');
                     return sessions.map(ses => ses.trim()).includes(selectedSession);
                 } catch(e) {
-                    return s.campuses_sessions.split(',').map(ses => ses.trim()).includes(selectedSession);
+                    return false;
                 }
             });
             
@@ -2071,7 +2110,7 @@
             document.getElementById('sm-avatar-preview').classList.add('hidden');
             document.getElementById('sm-avatar-placeholder').classList.remove('hidden');
             
-            document.getElementById('sm-registration-date').value = ensureYYYYMMDD(new Date());
+            setInputValue('sm-registration-date', ensureYYYYMMDD(new Date()));
             document.getElementById('sm-tuition-rate').value = 800000;
             
             // Reset contacts list
@@ -2113,12 +2152,12 @@
             document.getElementById('sm-school').value = student.school || '';
             document.getElementById('sm-class-school').value = student.class_school || '';
             document.getElementById('sm-tuition-rate').value = student.tuition_rate || 800000;
-            document.getElementById('sm-registration-date').value = ensureYYYYMMDD(student.registration_date);
+            setInputValue('sm-registration-date', ensureYYYYMMDD(student.registration_date));
             document.getElementById('sm-status').value = student.status || 'Đang học';
             document.getElementById('sm-notes').value = student.notes || '';
             
             // Ngày sinh
-            document.getElementById('sm-birth-date').value = ensureYYYYMMDD(student.birth_date);
+            setInputValue('sm-birth-date', ensureYYYYMMDD(student.birth_date));
             
             // Họ tên Bố Mẹ
             document.getElementById('sm-father-name').value = student.father_name || '';
@@ -2240,22 +2279,13 @@
                 const base64Data = reader.result;
                 
                 try {
-                    const response = await fetch(state.config.apiUrl, {
-                        method: 'POST',
-                        mode: 'cors',
-                        headers: { 'Content-Type': 'text/plain' },
-                        body: JSON.stringify({
-                            passcode: state.config.passcode,
-                            action: 'uploadAvatar',
-                            avatarData: {
-                                base64Data: base64Data,
-                                mimeType: file.type,
-                                filename: `avatar_${Date.now()}_${file.name}`
-                            }
-                        })
+                    const result = await safeFetch('uploadAvatar', {
+                        avatarData: {
+                            base64Data: base64Data,
+                            mimeType: file.type,
+                            filename: `avatar_${Date.now()}_${file.name}`
+                        }
                     });
-                    
-                    const result = await response.json();
                     
                     if (result.success) {
                         document.getElementById('sm-avatar-url').value = result.url;
@@ -2363,19 +2393,10 @@
             showLoader(isEdit ? 'Đang cập nhật...' : 'Đang thêm mới...', 'Đang gửi dữ liệu học sinh lên Google Sheets');
             
             try {
-                const response = await fetch(state.config.apiUrl, {
-                    method: 'POST',
-                    mode: 'cors',
-                    headers: { 'Content-Type': 'text/plain' },
-                    body: JSON.stringify({
-                        passcode: state.config.passcode,
-                        action: isEdit ? 'updateStudent' : 'addStudent',
-                        studentId: isEdit ? origId : undefined,
-                        studentData: studentData
-                    })
+                const result = await safeFetch(isEdit ? 'updateStudent' : 'addStudent', {
+                    studentId: isEdit ? origId : undefined,
+                    studentData: studentData
                 });
-                
-                const result = await response.json();
                 
                 if (result.success) {
                     showToast('success', isEdit ? 'Cập nhật thành công!' : 'Thêm thành công!', 
@@ -2462,17 +2483,7 @@
             showLoader('Đang nâng khối lớp...', 'Hệ thống đang tự động cộng khối lớp học sinh trên Google Sheets');
             
             try {
-                const response = await fetch(state.config.apiUrl, {
-                    method: 'POST',
-                    mode: 'cors',
-                    headers: { 'Content-Type': 'text/plain' },
-                    body: JSON.stringify({
-                        passcode: state.config.passcode,
-                        action: 'massGradeUp'
-                    })
-                });
-                
-                const result = await response.json();
+                const result = await safeFetch('massGradeUp');
                 
                 if (result.success) {
                     showToast('success', 'Chuyển giao thành công!', result.message);
@@ -2531,18 +2542,9 @@
             showLoader('Đang khôi phục...', 'Đang cập nhật ghi đè dữ liệu lên Google Sheets');
             
             try {
-                const response = await fetch(state.config.apiUrl, {
-                    method: 'POST',
-                    mode: 'cors',
-                    headers: { 'Content-Type': 'text/plain' },
-                    body: JSON.stringify({
-                        passcode: state.config.passcode,
-                        action: 'restoreBackup',
-                        backupData: state.restoreData
-                    })
+                const result = await safeFetch('restoreBackup', {
+                    backupData: state.restoreData
                 });
-                
-                const result = await response.json();
                 
                 if (result.success) {
                     showToast('success', 'Khôi phục thành công!', result.message);
@@ -2635,18 +2637,28 @@
         function ensureYYYYMMDD(dateStr) {
             if (!dateStr) return '';
             
-            if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
-            
-            if (/^\d{4}-\d{2}-\d{2}T/.test(dateStr)) {
-                return dateStr.substring(0, 10);
+            // Nếu đã là đối tượng Date
+            if (dateStr instanceof Date) {
+                const year = dateStr.getFullYear();
+                const month = String(dateStr.getMonth() + 1).padStart(2, '0');
+                const day = String(dateStr.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
             }
             
-            if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
-                const parts = dateStr.split('/');
+            const str = dateStr.toString().trim();
+            
+            if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+            
+            if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
+                return str.substring(0, 10);
+            }
+            
+            if (/^\d{2}\/\d{2}\/\d{4}$/.test(str)) {
+                const parts = str.split('/');
                 return `${parts[2]}-${parts[1]}-${parts[0]}`;
             }
             
-            const d = new Date(dateStr);
+            const d = new Date(str);
             if (!isNaN(d.getTime())) {
                 const year = d.getFullYear();
                 const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -2654,9 +2666,9 @@
                 return `${year}-${month}-${day}`;
             }
             
-            const partsDash = dateStr.split('-');
+            const partsDash = str.split('-');
             if (partsDash.length === 3) {
-                if (partsDash[0].length === 4) return dateStr; 
+                if (partsDash[0].length === 4) return str; 
                 return `${partsDash[2]}-${partsDash[1]}-${partsDash[0]}`; 
             }
             return '';
