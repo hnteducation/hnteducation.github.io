@@ -1,11 +1,12 @@
 /**
- * GOOGLE APPS SCRIPT BACKEND API FOR HNT EDUCATION (Phiên bản v2.1)
- * 
+ * GOOGLE APPS SCRIPT BACKEND API FOR HNT EDUCATION (Phiên bản v2.7)
+ *
  * HƯỚNG DẪN THIẾT LẬP:
  * 1. Mở một Google Sheet mới hoặc có sẵn trên Google Drive của bạn.
  * 2. Vào Extensions (Tiện ích mở rộng) > Apps Script.
  * 3. Xóa mọi code có sẵn và dán toàn bộ đoạn code dưới đây vào.
- * 4. Thay đổi biến PASSCODE ở dưới thành mật mã bảo mật của bạn.
+ * 4. Lưu pass thật trong Script Properties: HNT_MASTER_PASSCODE,
+ *    HNT_MANAGER_PASSCODE, HNT_PUBLIC_SECRET. Không đưa pass thật vào code.
  * 5. Bấm nút Deploy (Triển khai) > New deployment (Triển khai mới).
  *    - Chọn loại triển khai: Web app (Ứng dụng web).
  *    - Execute as (Trình thực thi): Me (email_cua_ban@gmail.com).
@@ -14,21 +15,295 @@
  */
 
 // ĐỊNH NGHĨA MẬT MÃ BẢO MẬT (Hãy đổi mật mã này và giữ bí mật)
-var PASSCODE = "HNT@2026"; 
+// BẢO MẬT: Không đưa pass thật lên web/repo. Hãy lưu pass trong Apps Script
+// Project Settings > Script properties:
+// HNT_MASTER_PASSCODE, HNT_MANAGER_PASSCODE, HNT_PUBLIC_SECRET.
+// Các giá trị dưới đây chỉ là fallback để thiết lập lần đầu.
+var PASSCODE = "CHANGE_ME_MASTER_PASSCODE";
+var MANAGER_PASSCODE = "";
+var PUBLIC_SECRET = "CHANGE_ME_PUBLIC_SECRET";
+
+var SESSION_TTL_SECONDS = 12 * 60 * 60;
+
+var DEFAULT_MANAGER_PERMISSIONS = {
+  canViewStudents: true,
+  canViewPayments: true,
+  canViewAllPayments: true,
+  canAddStudent: true,
+  canEditStudent: false,
+  canDeleteStudent: false,
+  canAddPayment: true,
+  canRestoreBackup: false,
+  canMassGradeUp: false,
+  canUploadAvatar: true,
+  canViewPrivateAlbum: false,
+  canEditPrivateAlbum: false,
+  canSharePublicLinks: true,
+  canManageSecurity: false
+};
 
 // Khai báo tiêu đề cột của 2 trang tính (Sheets)
 var STUDENT_HEADERS = [
-  "id", "name", "birth_date", "gender", "school", 
-  "grade", "class_school", "campuses_sessions", 
-  "registration_date", "status", "tuition_rate", "paid_until", 
-  "notes", "father_name", "father_phone", "mother_name", "mother_phone", 
-  "social_links", "avatar_url"
+  "id", "name", "birth_date", "gender", "school",
+  "grade", "class_school", "campuses_sessions",
+  "registration_date", "status", "tuition_rate", "paid_until",
+  "notes", "father_name", "father_phone", "mother_name", "mother_phone",
+  "social_links", "avatar_url", "study_start", "study_start_precision"
 ];
 
 var PAYMENT_HEADERS = [
-  "payment_id", "student_id", "student_name", "amount", 
+  "payment_id", "student_id", "student_name", "amount",
   "payment_date", "period_start", "period_end", "payment_method", "note"
 ];
+
+function getSecurityProperties() {
+  var props = PropertiesService.getScriptProperties();
+  var masterPass = props.getProperty("HNT_MASTER_PASSCODE") || PASSCODE;
+  var managerPass = props.getProperty("HNT_MANAGER_PASSCODE") || MANAGER_PASSCODE;
+  var publicSecret = props.getProperty("HNT_PUBLIC_SECRET") || PUBLIC_SECRET || masterPass;
+  var managerPermissions = DEFAULT_MANAGER_PERMISSIONS;
+  var managerAccounts = [];
+
+  try {
+    var savedPermissions = props.getProperty("HNT_MANAGER_PERMISSIONS");
+    if (savedPermissions) {
+      managerPermissions = Object.assign({}, DEFAULT_MANAGER_PERMISSIONS, JSON.parse(savedPermissions));
+    }
+  } catch (err) {
+    managerPermissions = DEFAULT_MANAGER_PERMISSIONS;
+  }
+
+  try {
+    var savedAccounts = props.getProperty("HNT_MANAGER_ACCOUNTS");
+    if (savedAccounts) {
+      managerAccounts = JSON.parse(savedAccounts).map(function(account, index) {
+        return normalizeManagerAccount(account, index);
+      }).filter(function(account) {
+        return account && account.passcode;
+      });
+    }
+  } catch (errAccounts) {
+    managerAccounts = [];
+  }
+
+  if (managerAccounts.length === 0 && managerPass) {
+    managerAccounts = [{
+      id: "manager_default",
+      name: "Quản lý giới hạn",
+      passcode: managerPass,
+      permissions: Object.assign({}, DEFAULT_MANAGER_PERMISSIONS, managerPermissions),
+      active: true
+    }];
+  }
+
+  return {
+    masterPass: masterPass,
+    managerPass: managerPass,
+    publicSecret: publicSecret,
+    managerPermissions: managerAccounts.length ? managerAccounts[0].permissions : managerPermissions,
+    managerAccounts: managerAccounts
+  };
+}
+
+function normalizeManagerAccount(account, index, existingById) {
+  account = account || {};
+  var id = account.id ? account.id.toString() : "";
+  if (!id) id = "manager_" + Date.now() + "_" + index;
+  var existing = existingById && existingById[id] ? existingById[id] : {};
+  var passcode = account.passcode !== undefined ? account.passcode.toString() : (existing.passcode || "");
+  var permissions = Object.assign({}, DEFAULT_MANAGER_PERMISSIONS, existing.permissions || {}, account.permissions || {});
+  permissions.canManageSecurity = false;
+  return {
+    id: id,
+    name: account.name ? account.name.toString() : (existing.name || ("Quản lý " + (index + 1))),
+    passcode: passcode,
+    permissions: permissions,
+    active: account.active !== false
+  };
+}
+
+function getManagerSignatureSeed(security) {
+  var accounts = security.managerAccounts || [];
+  if (accounts.length === 0) return security.managerPass || "";
+  return accounts.map(function(account) {
+    return account.id + ":" + account.passcode + ":" + (account.active !== false ? "1" : "0");
+  }).join("|");
+}
+
+function signText(text, secret) {
+  var digest = Utilities.computeHmacSha256Signature(text, secret);
+  return Utilities.base64EncodeWebSafe(digest).replace(/=+$/, "");
+}
+
+function createSession(role, accountId) {
+  var security = getSecurityProperties();
+  var expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
+  var payload = role + "." + (accountId || "master") + "." + expiresAt;
+  return {
+    token: payload + "." + signText(payload, security.masterPass + "|" + getManagerSignatureSeed(security)),
+    expiresAt: expiresAt
+  };
+}
+
+function parseSessionToken(token) {
+  if (!token) return null;
+  var parts = token.toString().split(".");
+  if (parts.length !== 3 && parts.length !== 4) return null;
+
+  var role = parts[0];
+  var accountId = parts.length === 4 ? parts[1] : "";
+  var expiresAt = parseInt(parts.length === 4 ? parts[2] : parts[1], 10);
+  var signature = parts.length === 4 ? parts[3] : parts[2];
+  if (!role || !expiresAt || expiresAt < Math.floor(Date.now() / 1000)) return null;
+
+  var security = getSecurityProperties();
+  var payload = parts.length === 4 ? (role + "." + accountId + "." + expiresAt) : (role + "." + expiresAt);
+  var expected = signText(payload, security.masterPass + "|" + getManagerSignatureSeed(security));
+  var legacyExpected = signText(payload, security.masterPass + "|" + security.managerPass);
+  if (signature !== expected && signature !== legacyExpected) return null;
+
+  return buildAuth(role, token, expiresAt, accountId);
+}
+
+function buildAuth(role, token, expiresAt, accountId) {
+  var security = getSecurityProperties();
+  var managerAccount = null;
+  if (role === "manager") {
+    var accounts = security.managerAccounts || [];
+    for (var i = 0; i < accounts.length; i++) {
+      if ((!accountId && i === 0) || accounts[i].id === accountId) {
+        managerAccount = accounts[i];
+        break;
+      }
+    }
+    if (!managerAccount || managerAccount.active === false) return null;
+  }
+
+  var permissions = role === "master"
+    ? {
+        canViewStudents: true,
+        canViewPayments: true,
+        canViewAllPayments: true,
+        canAddStudent: true,
+        canEditStudent: true,
+        canDeleteStudent: true,
+        canAddPayment: true,
+        canRestoreBackup: true,
+        canMassGradeUp: true,
+        canUploadAvatar: true,
+        canViewPrivateAlbum: true,
+        canEditPrivateAlbum: true,
+        canSharePublicLinks: true,
+        canManageSecurity: true
+      }
+    : managerAccount.permissions;
+
+  return {
+    role: role,
+    accountId: managerAccount ? managerAccount.id : "",
+    accountName: managerAccount ? managerAccount.name : "Toàn quyền",
+    token: token || "",
+    expiresAt: expiresAt || 0,
+    permissions: permissions
+  };
+}
+
+function authenticate(params) {
+  var session = parseSessionToken(params.sessionToken);
+  if (session) return session;
+
+  var security = getSecurityProperties();
+  var passcode = params.passcode ? params.passcode.toString() : "";
+  if (passcode && passcode === security.masterPass) {
+    var masterSession = createSession("master", "master");
+    return buildAuth("master", masterSession.token, masterSession.expiresAt, "master");
+  }
+  var accounts = security.managerAccounts || [];
+  for (var i = 0; i < accounts.length; i++) {
+    if (passcode && accounts[i].active !== false && accounts[i].passcode === passcode) {
+      var managerSession = createSession("manager", accounts[i].id);
+      return buildAuth("manager", managerSession.token, managerSession.expiresAt, accounts[i].id);
+    }
+  }
+  return null;
+}
+
+function requirePermission(auth, permissionName) {
+  if (!auth || !auth.permissions || !auth.permissions[permissionName]) {
+    return {
+      success: false,
+      error: "Unauthorized: Tai khoan hien tai khong co quyen thuc hien thao tac nay."
+    };
+  }
+  return null;
+}
+
+function getPublicSecret() {
+  return getSecurityProperties().publicSecret;
+}
+
+function getSecurityConfig() {
+  var security = getSecurityProperties();
+  return {
+    success: true,
+    managerPassConfigured: (security.managerAccounts || []).length > 0,
+    publicSecretConfigured: !!security.publicSecret,
+    managerPermissions: security.managerPermissions,
+    managerAccounts: (security.managerAccounts || []).map(function(account) {
+      return {
+        id: account.id,
+        name: account.name,
+        active: account.active !== false,
+        passConfigured: !!account.passcode,
+        permissions: account.permissions
+      };
+    })
+  };
+}
+
+function updateSecurityConfig(securityConfig) {
+  securityConfig = securityConfig || {};
+  var props = PropertiesService.getScriptProperties();
+
+  if (securityConfig.masterPasscode) {
+    props.setProperty("HNT_MASTER_PASSCODE", securityConfig.masterPasscode.toString());
+  }
+  if (securityConfig.managerPasscode !== undefined) {
+    var managerPass = securityConfig.managerPasscode ? securityConfig.managerPasscode.toString() : "";
+    if (managerPass === "DELETE") {
+      props.deleteProperty("HNT_MANAGER_PASSCODE");
+    } else if (managerPass) {
+      props.setProperty("HNT_MANAGER_PASSCODE", managerPass);
+    }
+  }
+  if (securityConfig.publicSecret) {
+    props.setProperty("HNT_PUBLIC_SECRET", securityConfig.publicSecret.toString());
+  }
+  if (securityConfig.managerPermissions) {
+    var merged = Object.assign({}, DEFAULT_MANAGER_PERMISSIONS, securityConfig.managerPermissions);
+    merged.canManageSecurity = false;
+    props.setProperty("HNT_MANAGER_PERMISSIONS", JSON.stringify(merged));
+  }
+  if (securityConfig.managerAccounts) {
+    var existingSecurity = getSecurityProperties();
+    var existingById = {};
+    (existingSecurity.managerAccounts || []).forEach(function(account) {
+      existingById[account.id] = account;
+    });
+    var normalizedAccounts = securityConfig.managerAccounts.map(function(account, index) {
+      return normalizeManagerAccount(account, index, existingById);
+    }).filter(function(account) {
+      return account.passcode;
+    });
+    props.setProperty("HNT_MANAGER_ACCOUNTS", JSON.stringify(normalizedAccounts));
+    props.deleteProperty("HNT_MANAGER_PASSCODE");
+    if (normalizedAccounts.length > 0) {
+      props.setProperty("HNT_MANAGER_PERMISSIONS", JSON.stringify(normalizedAccounts[0].permissions));
+    }
+  }
+
+  return getSecurityConfig();
+}
 
 function doGet(e) {
   return handleRequest(e, "GET");
@@ -39,13 +314,6 @@ function doPost(e) {
 }
 
 function handleRequest(e, method) {
-  // CORS setup
-  var headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
-  };
-  
   if (method === "OPTIONS" || (e && e.parameter && e.parameter.method === "OPTIONS")) {
     return ContentService.createTextOutput("").setMimeType(ContentService.MimeType.TEXT);
   }
@@ -54,66 +322,74 @@ function handleRequest(e, method) {
     var params = {};
     if (method === "GET") {
       params = e.parameter;
-    } else {
-      if (e.postData && e.postData.contents) {
-        params = JSON.parse(e.postData.contents);
-      }
+    } else if (e.postData && e.postData.contents) {
+      params = JSON.parse(e.postData.contents);
     }
-    
+
     var action = params.action;
     var isPublicAction = (action === "getPublicReport" || action === "getPublicSchedule");
-    
-    // 1. Xác thực Passcode (Bỏ qua nếu là public action)
-    var clientPasscode = params.passcode;
-    if (!isPublicAction && (!clientPasscode || clientPasscode !== PASSCODE)) {
+    var auth = isPublicAction ? null : authenticate(params);
+
+    if (!isPublicAction && !auth) {
       return createJSONResponse({
         success: false,
-        error: "Unauthorized: Mật mã truy cập không chính xác."
+        error: "Unauthorized: Mat ma hoac phien dang nhap khong hop le."
       }, 403);
     }
-    
+
     var result = {};
-    
-    // Tự động tạo các sheet / bổ sung các cột mới nếu thiếu
     initSheets();
-    
-    // 2. Phân tuyến Action
+
     if (action === "login") {
-      result = { success: true, message: "Đăng nhập thành công." };
+      result = {
+        success: true,
+        message: "Dang nhap thanh cong.",
+        role: auth.role,
+        sessionToken: auth.token,
+        expiresAt: auth.expiresAt,
+        permissions: auth.permissions
+      };
     } else if (action === "getPublicReport") {
       result = getPublicReport(params.studentId, params.token);
     } else if (action === "getPublicSchedule") {
       result = getPublicSchedule();
     } else if (action === "getData") {
-      result = getData();
+      result = requirePermission(auth, "canViewStudents") || getData(auth);
     } else if (action === "addStudent") {
-      result = addStudent(params.studentData);
+      result = requirePermission(auth, "canAddStudent") || addStudent(params.studentData);
     } else if (action === "updateStudent") {
-      result = updateStudent(params.studentId, params.studentData);
+      result = requirePermission(auth, "canEditStudent") || updateStudent(params.studentId, params.studentData);
     } else if (action === "deleteStudent") {
-      result = deleteStudent(params.studentId);
+      result = requirePermission(auth, "canDeleteStudent") || deleteStudent(params.studentId);
     } else if (action === "addPayment") {
-      result = addPayment(params.paymentData);
+      result = requirePermission(auth, "canAddPayment") || addPayment(params.paymentData);
     } else if (action === "massGradeUp") {
-      result = massGradeUp();
+      result = requirePermission(auth, "canMassGradeUp") || massGradeUp();
     } else if (action === "uploadAvatar") {
-      result = uploadAvatar(params.avatarData);
+      result = requirePermission(auth, "canUploadAvatar") || uploadAvatar(params.avatarData);
+    } else if (action === "uploadAlbumPhoto") {
+      result = requirePermission(auth, "canEditPrivateAlbum") || uploadAlbumPhoto(params.albumData);
     } else if (action === "restoreBackup") {
-      result = restoreBackup(params.backupData);
+      result = requirePermission(auth, "canRestoreBackup") || restoreBackup(params.backupData);
+    } else if (action === "createParentToken") {
+      result = requirePermission(auth, "canSharePublicLinks") || createParentToken(params.studentId);
+    } else if (action === "getSecurityConfig") {
+      result = requirePermission(auth, "canManageSecurity") || getSecurityConfig();
+    } else if (action === "updateSecurityConfig") {
+      result = requirePermission(auth, "canManageSecurity") || updateSecurityConfig(params.securityConfig);
     } else {
-      result = { success: false, error: "Action không hợp lệ: " + action };
+      result = { success: false, error: "Action khong hop le: " + action };
     }
-    
+
     return createJSONResponse(result, 200);
-      
+
   } catch (err) {
     return createJSONResponse({
       success: false,
-      error: "Lỗi hệ thống Apps Script: " + err.toString()
+      error: "Loi he thong Apps Script: " + err.toString()
     }, 500);
   }
 }
-
 function createJSONResponse(data, statusCode) {
   var output = ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
@@ -126,7 +402,7 @@ function initSheets() {
   if (!ss) {
     throw new Error("Không thể liên kết với bảng tính Google Sheet. Đảm bảo thầy tạo Apps Script bằng cách vào Extensions > Apps Script từ bên trong Google Sheet.");
   }
-  
+
   // 1. Sheet HocSinh
   var studentSheet = ss.getSheetByName("HocSinh");
   if (!studentSheet) {
@@ -153,7 +429,7 @@ function initSheets() {
       }
     }
   }
-  
+
   // 2. Sheet HocPhi
   var paymentSheet = ss.getSheetByName("HocPhi");
   if (!paymentSheet) {
@@ -183,17 +459,42 @@ function initSheets() {
 }
 
 // 1. LẤY TOÀN BỘ DỮ LIỆU
-function getData() {
+function redactStudentsForRole(students, auth) {
+  if (!auth || auth.role === "master") return students;
+  if (auth.permissions && auth.permissions.canViewPrivateAlbum) return students;
+
+  return students.map(function(student) {
+    var copy = Object.assign({}, student);
+    if (copy.notes) {
+      copy.notes = getStudentNoteWithoutAlbum(copy.notes);
+    }
+    return copy;
+  });
+}
+
+function getStudentNoteWithoutAlbum(notes) {
+  if (!notes) return "";
+  var marker = "===ALBUM===";
+  var idx = notes.toString().indexOf(marker);
+  if (idx === -1) return notes;
+  return notes.toString().substring(0, idx).trim();
+}
+
+function getData(auth) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var studentSheet = ss.getSheetByName("HocSinh");
   var paymentSheet = ss.getSheetByName("HocPhi");
-  
+
   var students = getSheetRowsAsObjects(studentSheet, STUDENT_HEADERS);
   var payments = getSheetRowsAsObjects(paymentSheet, PAYMENT_HEADERS);
-  
+
+  if (auth && auth.permissions && (!auth.permissions.canViewPayments || !auth.permissions.canViewAllPayments)) {
+    payments = [];
+  }
+
   return {
     success: true,
-    students: students,
+    students: redactStudentsForRole(students, auth),
     payments: payments
   };
 }
@@ -201,15 +502,15 @@ function getData() {
 function getSheetRowsAsObjects(sheet, headers) {
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) return [];
-  
+
   var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
   var result = [];
-  
+
   for (var i = 0; i < values.length; i++) {
     var row = values[i];
     var obj = {};
     var isEmpty = true;
-    
+
     for (var j = 0; j < headers.length; j++) {
       var val = row[j];
       if (val instanceof Date) {
@@ -220,7 +521,7 @@ function getSheetRowsAsObjects(sheet, headers) {
         isEmpty = false;
       }
     }
-    
+
     if (!isEmpty) {
       result.push(obj);
     }
@@ -232,29 +533,29 @@ function getSheetRowsAsObjects(sheet, headers) {
 function addStudent(studentData) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("HocSinh");
-  
+
   // Trích xuất năm sinh từ ngày sinh birth_date (Định dạng: YYYY-MM-DD)
-  var birthYear = 2011; 
+  var birthYear = 2011;
   if (studentData.birth_date && studentData.birth_date.indexOf("-") > -1) {
     birthYear = parseInt(studentData.birth_date.split("-")[0]);
   } else if (studentData.birth_year) {
     birthYear = parseInt(studentData.birth_year);
   }
-  var gender = studentData.gender === "Nữ" ? 1 : 0; 
-  
+  var gender = studentData.gender === "Nữ" ? 1 : 0;
+
   // Tự sinh ID
   var nextId = generateNextStudentId(sheet, birthYear, gender);
   studentData.id = nextId;
-  
+
   var rowValues = [];
   for (var i = 0; i < STUDENT_HEADERS.length; i++) {
     var key = STUDENT_HEADERS[i];
     var val = studentData[key] !== undefined ? studentData[key] : "";
     rowValues.push(val);
   }
-  
+
   sheet.appendRow(rowValues);
-  
+
   return {
     success: true,
     message: "Thêm học sinh mới thành công.",
@@ -265,7 +566,7 @@ function addStudent(studentData) {
 function generateNextStudentId(sheet, birthYear, gender) {
   var lastRow = sheet.getLastRow();
   var prefix = birthYear.toString() + gender.toString(); // e.g., 20110 hoặc 20111
-  
+
   var maxSeq = 0;
   if (lastRow > 1) {
     var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
@@ -280,13 +581,13 @@ function generateNextStudentId(sheet, birthYear, gender) {
       }
     }
   }
-  
+
   var nextSeq = maxSeq + 1;
   var seqStr = nextSeq.toString();
   while (seqStr.length < 3) {
     seqStr = "0" + seqStr;
   }
-  
+
   return prefix + seqStr;
 }
 
@@ -295,27 +596,27 @@ function updateStudent(studentId, studentData) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("HocSinh");
   var lastRow = sheet.getLastRow();
-  
+
   if (lastRow <= 1) {
     return { success: false, error: "Không tìm thấy học sinh." };
   }
-  
+
   var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
   var rowIndex = -1;
-  
+
   for (var i = 0; i < ids.length; i++) {
     if (ids[i][0].toString() === studentId.toString()) {
-      rowIndex = i + 2; 
+      rowIndex = i + 2;
       break;
     }
   }
-  
+
   if (rowIndex === -1) {
     return { success: false, error: "Không tìm thấy học sinh có mã cũ: " + studentId };
   }
-  
+
   var newId = studentData.id ? studentData.id.toString().trim() : '';
-  
+
   // A. Trường hợp Thay đổi mã học sinh
   if (newId && newId !== studentId.toString()) {
     // Kiểm tra xem mã mới có bị trùng với học sinh khác không
@@ -324,11 +625,11 @@ function updateStudent(studentId, studentData) {
         return { success: false, error: "Mã học sinh mới " + newId + " đã bị trùng với một học sinh khác!" };
       }
     }
-    
+
     // Đồng bộ mã học sinh mới sang tất cả lịch sử đóng học phí ở sheet HocPhi
     syncStudentIdInPayments(studentId, newId);
   }
-  
+
   // B. Cập nhật tất cả các cột của Học sinh (Tối ưu hóa: Đọc và ghi toàn bộ hàng trong 1 cuộc gọi)
   var currentValues = sheet.getRange(rowIndex, 1, 1, STUDENT_HEADERS.length).getValues()[0];
   var newRowValues = [];
@@ -341,7 +642,7 @@ function updateStudent(studentId, studentData) {
     }
   }
   sheet.getRange(rowIndex, 1, 1, STUDENT_HEADERS.length).setValues([newRowValues]);
-  
+
   return {
     success: true,
     message: "Cập nhật thông tin học sinh và đồng bộ mã giao dịch thành công."
@@ -354,10 +655,10 @@ function syncStudentIdInPayments(oldId, newId) {
   var sheet = ss.getSheetByName("HocPhi");
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) return;
-  
-  var colStudentId = 2; 
+
+  var colStudentId = 2;
   var ids = sheet.getRange(2, colStudentId, lastRow - 1, 1).getValues();
-  
+
   for (var i = 0; i < ids.length; i++) {
     if (ids[i][0].toString() === oldId.toString()) {
       sheet.getRange(i + 2, colStudentId).setValue(newId.toString());
@@ -370,7 +671,7 @@ function addPayment(paymentData) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var paymentSheet = ss.getSheetByName("HocPhi");
   var studentSheet = ss.getSheetByName("HocSinh");
-  
+
   // Sinh mã giao dịch mới
   var lastPayRow = paymentSheet.getLastRow();
   var nextPayId = 10001;
@@ -383,7 +684,7 @@ function addPayment(paymentData) {
     }
   }
   paymentData.payment_id = nextPayId;
-  
+
   // Ghi nhận vào bảng HocPhi
   var rowValues = [];
   for (var i = 0; i < PAYMENT_HEADERS.length; i++) {
@@ -392,7 +693,7 @@ function addPayment(paymentData) {
     rowValues.push(val);
   }
   paymentSheet.appendRow(rowValues);
-  
+
   // Cập nhật trường `paid_until` ở sheet HocSinh
   var studentId = paymentData.student_id;
   var lastStudRow = studentSheet.getLastRow();
@@ -405,13 +706,13 @@ function addPayment(paymentData) {
         break;
       }
     }
-    
+
     if (studRowIndex !== -1) {
       var colPaidUntil = STUDENT_HEADERS.indexOf("paid_until") + 1;
       studentSheet.getRange(studRowIndex, colPaidUntil).setValue(paymentData.period_end);
     }
   }
-  
+
   return {
     success: true,
     message: "Ghi nhận học phí thành công.",
@@ -424,25 +725,25 @@ function massGradeUp() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("HocSinh");
   var lastRow = sheet.getLastRow();
-  
+
   if (lastRow <= 1) {
     return { success: false, error: "Không có học sinh để thực hiện." };
   }
-  
+
   var colGrade = STUDENT_HEADERS.indexOf("grade") + 1;
   var colStatus = STUDENT_HEADERS.indexOf("status") + 1;
   var colNotes = STUDENT_HEADERS.indexOf("notes") + 1;
-  
+
   var grades = sheet.getRange(2, colGrade, lastRow - 1, 1).getValues();
   var statuses = sheet.getRange(2, colStatus, lastRow - 1, 1).getValues();
-  
+
   var countUp = 0;
   var countGrad = 0;
-  
+
   for (var i = 0; i < grades.length; i++) {
     var rowNum = i + 2;
     var currentStatus = statuses[i][0];
-    
+
     if (currentStatus === "Đang học") {
       var currentGrade = parseInt(grades[i][0]);
       if (!isNaN(currentGrade)) {
@@ -459,47 +760,68 @@ function massGradeUp() {
       }
     }
   }
-  
+
   return {
     success: true,
     message: "Chuyển niên khóa thành công! Lên lớp cho " + countUp + " học sinh; Đã nghỉ (Tốt nghiệp lớp 12) cho " + countGrad + " học sinh."
   };
 }
 
-// 6. TẢI ẢNH ĐẠI DIỆN LÊN GOOGLE DRIVE
-function uploadAvatar(avatarData) {
+function sanitizeDriveName(name) {
+  return (name || "untitled").toString().replace(/[\\/:*?"<>|#%\[\]]/g, "_").trim() || "untitled";
+}
+
+function getOrCreateDriveFolder(folderName, parentFolder) {
+  var folders = parentFolder
+    ? parentFolder.getFoldersByName(folderName)
+    : DriveApp.getFoldersByName(folderName);
+
+  if (folders.hasNext()) {
+    return folders.next();
+  }
+
+  return parentFolder
+    ? parentFolder.createFolder(folderName)
+    : DriveApp.createFolder(folderName);
+}
+
+function uploadImageToDrive(imageData, rootFolderName, childFolderName) {
+  if (!imageData || !imageData.base64Data || !imageData.mimeType) {
+    return { success: false, error: "Thiếu dữ liệu hình ảnh để tải lên Google Drive." };
+  }
+
   try {
-    var base64String = avatarData.base64Data.split(",")[1];
+    var base64String = imageData.base64Data.indexOf(",") > -1
+      ? imageData.base64Data.split(",")[1]
+      : imageData.base64Data;
     var decoded = Utilities.base64Decode(base64String);
-    var blob = Utilities.newBlob(decoded, avatarData.mimeType, avatarData.filename);
-    
-    var folderName = "HNT_Avatars";
+    var filename = sanitizeDriveName(imageData.filename || ("hnt_image_" + new Date().getTime() + ".jpg"));
+    var blob = Utilities.newBlob(decoded, imageData.mimeType, filename);
+
     var folder;
-    
+
     // Sử dụng try-catch lồng nhau phòng trường hợp lỗi phân quyền Drive
     try {
-      var folders = DriveApp.getFoldersByName(folderName);
-      if (folders.hasNext()) {
-        folder = folders.next();
-      } else {
-        folder = DriveApp.createFolder(folderName);
+      folder = getOrCreateDriveFolder(rootFolderName);
+      if (childFolderName) {
+        folder = getOrCreateDriveFolder(sanitizeDriveName(childFolderName), folder);
       }
     } catch(folderErr) {
       Logger.log("Không thể tạo folder riêng, lưu tạm vào Drive Root: " + folderErr.toString());
       folder = DriveApp.getRootFolder();
     }
-    
+
     var file = folder.createFile(blob);
-    
+
     // Cố gắng chia sẻ public link, nếu tài khoản Google Workspace chặn thì bỏ qua vẫn lấy link
     try {
       file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     } catch(shareErr) {
       Logger.log("Không thể bật chia sẻ: " + shareErr.toString());
     }
-    
+
     var url = "https://lh3.googleusercontent.com/d/" + file.getId();
-    
+
     return {
       success: true,
       url: url,
@@ -513,22 +835,35 @@ function uploadAvatar(avatarData) {
   }
 }
 
+// 6. TẢI ẢNH ĐẠI DIỆN LÊN GOOGLE DRIVE
+function uploadAvatar(avatarData) {
+  return uploadImageToDrive(avatarData, "HNT_Avatars");
+}
+
+// 6B. TẢI ẢNH ALBUM NỘI BỘ LÊN GOOGLE DRIVE
+function uploadAlbumPhoto(albumData) {
+  var studentId = albumData && albumData.studentId ? albumData.studentId.toString() : "unknown";
+  var studentName = albumData && albumData.studentName ? albumData.studentName.toString() : "";
+  var folderName = studentId + (studentName ? "_" + studentName : "");
+  return uploadImageToDrive(albumData, "HNT_Albums", folderName);
+}
+
 // 7. KHÔI PHỤC DỮ LIỆU ĐÈ TỪ FILE BACKUP JSON
 function restoreBackup(backupData) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var studentSheet = ss.getSheetByName("HocSinh");
   var paymentSheet = ss.getSheetByName("HocPhi");
-  
+
   if (studentSheet.getLastRow() > 1) {
     studentSheet.deleteRows(2, studentSheet.getLastRow() - 1);
   }
   if (paymentSheet.getLastRow() > 1) {
     paymentSheet.deleteRows(2, paymentSheet.getLastRow() - 1);
   }
-  
+
   var students = backupData.students || [];
   var payments = backupData.payments || [];
-  
+
   for (var i = 0; i < students.length; i++) {
     var s = students[i];
     var row = [];
@@ -538,7 +873,7 @@ function restoreBackup(backupData) {
     }
     studentSheet.appendRow(row);
   }
-  
+
   for (var k = 0; k < payments.length; k++) {
     var p = payments[k];
     var rowPay = [];
@@ -548,7 +883,7 @@ function restoreBackup(backupData) {
     }
     paymentSheet.appendRow(rowPay);
   }
-  
+
   return {
     success: true,
     message: "Khôi phục dữ liệu thành công! Đã phục hồi " + students.length + " học sinh và " + payments.length + " giao dịch đóng học phí."
@@ -560,11 +895,11 @@ function deleteStudent(studentId) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var studentSheet = ss.getSheetByName("HocSinh");
   var lastRow = studentSheet.getLastRow();
-  
+
   if (lastRow <= 1) {
     return { success: false, error: "Không tìm thấy học sinh để xóa." };
   }
-  
+
   var ids = studentSheet.getRange(2, 1, lastRow - 1, 1).getValues();
   var rowIndex = -1;
   for (var i = 0; i < ids.length; i++) {
@@ -573,14 +908,14 @@ function deleteStudent(studentId) {
       break;
     }
   }
-  
+
   if (rowIndex === -1) {
     return { success: false, error: "Không tìm thấy học sinh với mã: " + studentId };
   }
-  
+
   // Xóa hàng học sinh
   studentSheet.deleteRow(rowIndex);
-  
+
   // Xóa cả học phí liên quan đến học sinh này
   var paymentSheet = ss.getSheetByName("HocPhi");
   var lastPayRow = paymentSheet.getLastRow();
@@ -593,7 +928,7 @@ function deleteStudent(studentId) {
       }
     }
   }
-  
+
   return {
     success: true,
     message: "Xóa học sinh và lịch sử giao dịch liên quan thành công."
@@ -629,50 +964,59 @@ function testDriveWrite() {
 }
 
 // BÁO CÁO PHỤ HUYNH BẢO MẬT & ĐỘNG (v2.4)
-function generateParentToken(studentId, passcode) {
-  var str = studentId + "_" + passcode;
-  var hash = 0;
-  for (var i = 0; i < str.length; i++) {
-    var char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
+function generateParentToken(studentId) {
+  return signText("parent-report." + studentId, getPublicSecret());
+}
+
+function createParentToken(studentId) {
+  if (!studentId) {
+    return { success: false, error: "Thieu ma hoc sinh de tao link public." };
   }
-  return Math.abs(hash).toString(36);
+  return {
+    success: true,
+    studentId: studentId,
+    token: generateParentToken(studentId)
+  };
 }
 
 function getPublicReport(studentId, token) {
   if (!studentId || !token) {
     return { success: false, error: "Thiếu mã học sinh hoặc chữ ký bảo mật." };
   }
-  
-  var expectedToken = generateParentToken(studentId, PASSCODE);
+
+  var expectedToken = generateParentToken(studentId);
   if (token !== expectedToken) {
     return { success: false, error: "Chữ ký bảo mật không hợp lệ hoặc đã hết hạn." };
   }
-  
+
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var studentSheet = ss.getSheetByName("HocSinh");
   var paymentSheet = ss.getSheetByName("HocPhi");
-  
+
   var students = getSheetRowsAsObjects(studentSheet, STUDENT_HEADERS);
   var student = students.find(function(s) {
     return s.id.toString() === studentId.toString();
   });
-  
+
   if (!student) {
     return { success: false, error: "Không tìm thấy học sinh." };
   }
-  
+
   // Chỉ trả về thông tin cần thiết, ẩn SĐT động và Ghi chú nhạy cảm để bảo mật
   var publicStudent = {
     name: student.name,
     id: student.id,
+	gender: student.gender,
     grade: student.grade,
     school: student.school,
+    class_school: student.class_school,
+    campuses_sessions: student.campuses_sessions,
     paid_until: student.paid_until,
-    registration_date: student.registration_date
+    registration_date: student.registration_date,
+    study_start: student.study_start,
+    study_start_precision: student.study_start_precision
   };
-  
+
   var payments = getSheetRowsAsObjects(paymentSheet, PAYMENT_HEADERS);
   var studentPayments = payments.filter(function(p) {
     return p.student_id.toString() === studentId.toString();
@@ -686,7 +1030,7 @@ function getPublicReport(studentId, token) {
       note: p.note
     };
   });
-  
+
   return {
     success: true,
     student: publicStudent,
@@ -695,25 +1039,63 @@ function getPublicReport(studentId, token) {
 }
 
 // BÁO CÁO THỜI KHÓA BIỂU CÔNG KHAI NỘI BỘ (ANONYMIZED)
+function anonymizeNameForPublic(name) {
+  if (!name) return "";
+  var parts = name.toString().trim().split(/\s+/);
+  var masked = [];
+  for (var i = 0; i < parts.length; i++) {
+    if (i === 0) {
+      masked.push(parts[i]);
+    } else {
+      masked.push(parts[i].charAt(0).toUpperCase() + ".");
+    }
+  }
+  return masked.join(" ");
+}
+
 function getPublicSchedule() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var studentSheet = ss.getSheetByName("HocSinh");
+  var paymentSheet = ss.getSheetByName("HocPhi");
   var students = getSheetRowsAsObjects(studentSheet, STUDENT_HEADERS);
-  
+  var payments = getSheetRowsAsObjects(paymentSheet, PAYMENT_HEADERS);
+  var latestPaymentByStudent = {};
+
+  for (var p = 0; p < payments.length; p++) {
+    var payment = payments[p];
+    if (!payment.student_id) continue;
+    var paymentStudentId = payment.student_id.toString();
+    var currentLatest = latestPaymentByStudent[paymentStudentId];
+    if (!currentLatest || (payment.payment_date || "").toString() > (currentLatest.payment_date || "").toString()) {
+      latestPaymentByStudent[paymentStudentId] = {
+        payment_date: payment.payment_date,
+        period_start: payment.period_start,
+        period_end: payment.period_end
+      };
+    }
+  }
+
   var publicStudents = [];
   for (var i = 0; i < students.length; i++) {
     var s = students[i];
     if (s.status === "Đang học") {
+      var sid = s.id ? s.id.toString() : "";
       publicStudents.push({
+        public_id: "hs_" + (i + 1),
+        name: anonymizeNameForPublic(s.name),
+        gender: s.gender,
         grade: s.grade,
         school: s.school,
-        campuses_sessions: s.campuses_sessions
+        status: "Đang học",
+        campuses_sessions: s.campuses_sessions,
+        lastPayment: sid && latestPaymentByStudent[sid] ? latestPaymentByStudent[sid] : null
       });
     }
   }
-  
+
   return {
     success: true,
     students: publicStudents
   };
 }
+
