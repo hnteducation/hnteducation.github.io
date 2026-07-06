@@ -24,6 +24,7 @@ var MANAGER_PASSCODE = "";
 var PUBLIC_SECRET = "CHANGE_ME_PUBLIC_SECRET";
 
 var SESSION_TTL_SECONDS = 12 * 60 * 60;
+var REMEMBER_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 var DEFAULT_MANAGER_PERMISSIONS = {
   canViewStudents: true,
@@ -135,9 +136,10 @@ function signText(text, secret) {
   return Utilities.base64EncodeWebSafe(digest).replace(/=+$/, "");
 }
 
-function createSession(role, accountId) {
+function createSession(role, accountId, remember) {
   var security = getSecurityProperties();
-  var expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
+  var ttl = remember ? REMEMBER_SESSION_TTL_SECONDS : SESSION_TTL_SECONDS;
+  var expiresAt = Math.floor(Date.now() / 1000) + ttl;
   var payload = role + "." + (accountId || "master") + "." + expiresAt;
   return {
     token: payload + "." + signText(payload, security.masterPass + "|" + getManagerSignatureSeed(security)),
@@ -214,14 +216,15 @@ function authenticate(params) {
 
   var security = getSecurityProperties();
   var passcode = params.passcode ? params.passcode.toString() : "";
+  var remember = params.rememberLogin === true || params.rememberLogin === "true";
   if (passcode && passcode === security.masterPass) {
-    var masterSession = createSession("master", "master");
+    var masterSession = createSession("master", "master", remember);
     return buildAuth("master", masterSession.token, masterSession.expiresAt, "master");
   }
   var accounts = security.managerAccounts || [];
   for (var i = 0; i < accounts.length; i++) {
     if (passcode && accounts[i].active !== false && accounts[i].passcode === passcode) {
-      var managerSession = createSession("manager", accounts[i].id);
+      var managerSession = createSession("manager", accounts[i].id, remember);
       return buildAuth("manager", managerSession.token, managerSession.expiresAt, accounts[i].id);
     }
   }
@@ -352,7 +355,7 @@ function handleRequest(e, method) {
     } else if (action === "getPublicReport") {
       result = getPublicReport(params.studentId, params.token);
     } else if (action === "getPublicSchedule") {
-      result = getPublicSchedule();
+      result = getPublicSchedule(params.token);
     } else if (action === "getData") {
       result = requirePermission(auth, "canViewStudents") || getData(auth);
     } else if (action === "addStudent") {
@@ -373,6 +376,8 @@ function handleRequest(e, method) {
       result = requirePermission(auth, "canRestoreBackup") || restoreBackup(params.backupData);
     } else if (action === "createParentToken") {
       result = requirePermission(auth, "canSharePublicLinks") || createParentToken(params.studentId);
+    } else if (action === "createPublicScheduleToken") {
+      result = requirePermission(auth, "canSharePublicLinks") || createPublicScheduleToken();
     } else if (action === "getSecurityConfig") {
       result = requirePermission(auth, "canManageSecurity") || getSecurityConfig();
     } else if (action === "updateSecurityConfig") {
@@ -979,6 +984,17 @@ function createParentToken(studentId) {
   };
 }
 
+function generatePublicScheduleToken() {
+  return signText("public-schedule", getPublicSecret());
+}
+
+function createPublicScheduleToken() {
+  return {
+    success: true,
+    token: generatePublicScheduleToken()
+  };
+}
+
 function getPublicReport(studentId, token) {
   if (!studentId || !token) {
     return { success: false, error: "Thiếu mã học sinh hoặc chữ ký bảo mật." };
@@ -1053,7 +1069,11 @@ function anonymizeNameForPublic(name) {
   return masked.join(" ");
 }
 
-function getPublicSchedule() {
+function getPublicSchedule(token) {
+  if (!token || token !== generatePublicScheduleToken()) {
+    return { success: false, error: "Chu ky lich hoc cong khai khong hop le." };
+  }
+
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var studentSheet = ss.getSheetByName("HocSinh");
   var paymentSheet = ss.getSheetByName("HocPhi");
