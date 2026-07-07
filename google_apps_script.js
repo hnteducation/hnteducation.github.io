@@ -57,6 +57,11 @@ var PAYMENT_HEADERS = [
   "payment_date", "period_start", "period_end", "payment_method", "note"
 ];
 
+var ALBUM_HEADERS = [
+  "photo_id", "student_id", "student_name", "url", "file_id",
+  "note", "created_at", "note_updated_at", "uploaded_by", "status"
+];
+
 function getSecurityProperties() {
   var props = PropertiesService.getScriptProperties();
   var masterPass = props.getProperty("HNT_MASTER_PASSCODE") || PASSCODE;
@@ -367,11 +372,15 @@ function handleRequest(e, method) {
     } else if (action === "addPayment") {
       result = requirePermission(auth, "canAddPayment") || addPayment(params.paymentData);
     } else if (action === "massGradeUp") {
-      result = requirePermission(auth, "canMassGradeUp") || massGradeUp();
+      result = requirePermission(auth, "canMassGradeUp") || massGradeUp(params.gradeUpData || params.options || {});
     } else if (action === "uploadAvatar") {
       result = requirePermission(auth, "canUploadAvatar") || uploadAvatar(params.avatarData);
     } else if (action === "uploadAlbumPhoto") {
       result = requirePermission(auth, "canEditPrivateAlbum") || uploadAlbumPhoto(params.albumData);
+    } else if (action === "updateAlbumPhoto") {
+      result = requirePermission(auth, "canEditPrivateAlbum") || updateAlbumPhoto(params.photoId, params.photoData || {});
+    } else if (action === "deleteAlbumPhoto") {
+      result = requirePermission(auth, "canEditPrivateAlbum") || deleteAlbumPhoto(params.photoId);
     } else if (action === "restoreBackup") {
       result = requirePermission(auth, "canRestoreBackup") || restoreBackup(params.backupData);
     } else if (action === "createParentToken") {
@@ -461,6 +470,32 @@ function initSheets() {
       }
     }
   }
+
+  // 3. Sheet AlbumAnh: mỗi ảnh album là một dòng riêng để tránh giới hạn độ dài ô notes
+  var albumSheet = ss.getSheetByName("AlbumAnh");
+  if (!albumSheet) {
+    albumSheet = ss.insertSheet("AlbumAnh");
+    albumSheet.appendRow(ALBUM_HEADERS);
+    albumSheet.getRange(1, 1, 1, ALBUM_HEADERS.length)
+      .setFontWeight("bold")
+      .setBackground("#f8d7da");
+  } else {
+    var lastAlbumCol = albumSheet.getLastColumn();
+    var currentAlbumHeaders = [];
+    if (lastAlbumCol > 0) {
+      currentAlbumHeaders = albumSheet.getRange(1, 1, 1, lastAlbumCol).getValues()[0];
+    }
+    for (var a = 0; a < ALBUM_HEADERS.length; a++) {
+      var albumHeaderName = ALBUM_HEADERS[a];
+      if (currentAlbumHeaders.indexOf(albumHeaderName) === -1) {
+        var nextAlbumCol = albumSheet.getLastColumn() + 1;
+        albumSheet.getRange(1, nextAlbumCol).setValue(albumHeaderName)
+          .setFontWeight("bold")
+          .setBackground("#f8d7da");
+        currentAlbumHeaders.push(albumHeaderName);
+      }
+    }
+  }
 }
 
 // 1. LẤY TOÀN BỘ DỮ LIỆU
@@ -479,28 +514,33 @@ function redactStudentsForRole(students, auth) {
 
 function getStudentNoteWithoutAlbum(notes) {
   if (!notes) return "";
-  var marker = "===ALBUM===";
-  var idx = notes.toString().indexOf(marker);
-  if (idx === -1) return notes;
-  return notes.toString().substring(0, idx).trim();
+  return notes.toString().replace(/===ALBUM===[\s\S]*?(?=(===JOURNAL===|===ACADEMIC===|$))/g, "").trim();
 }
 
 function getData(auth) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var studentSheet = ss.getSheetByName("HocSinh");
   var paymentSheet = ss.getSheetByName("HocPhi");
+  var albumSheet = ss.getSheetByName("AlbumAnh");
 
   var students = getSheetRowsAsObjects(studentSheet, STUDENT_HEADERS);
   var payments = getSheetRowsAsObjects(paymentSheet, PAYMENT_HEADERS);
+  var albums = albumSheet ? getSheetRowsAsObjects(albumSheet, ALBUM_HEADERS).filter(function(photo) {
+    return photo.status !== "deleted";
+  }) : [];
 
   if (auth && auth.permissions && (!auth.permissions.canViewPayments || !auth.permissions.canViewAllPayments)) {
     payments = [];
+  }
+  if (!auth || !auth.permissions || (!auth.permissions.canViewPrivateAlbum && !auth.permissions.canEditPrivateAlbum)) {
+    albums = [];
   }
 
   return {
     success: true,
     students: redactStudentsForRole(students, auth),
-    payments: payments
+    payments: payments,
+    albums: albums
   };
 }
 
@@ -714,7 +754,12 @@ function addPayment(paymentData) {
 
     if (studRowIndex !== -1) {
       var colPaidUntil = STUDENT_HEADERS.indexOf("paid_until") + 1;
-      studentSheet.getRange(studRowIndex, colPaidUntil).setValue(paymentData.period_end);
+      var currentPaidUntil = studentSheet.getRange(studRowIndex, colPaidUntil).getValue();
+      var currentPaidStr = currentPaidUntil instanceof Date ? formatDate(currentPaidUntil) : (currentPaidUntil || "").toString();
+      var newPaidStr = (paymentData.period_end || "").toString();
+      if (!currentPaidStr || (newPaidStr && newPaidStr > currentPaidStr)) {
+        studentSheet.getRange(studRowIndex, colPaidUntil).setValue(paymentData.period_end);
+      }
     }
   }
 
@@ -726,7 +771,55 @@ function addPayment(paymentData) {
 }
 
 // 5. CHUYỂN NIÊN KHÓA HÀNG LOẠT
-function massGradeUp() {
+function parseAcademicMeta(notes) {
+  if (!notes || notes.toString().indexOf("===ACADEMIC===") === -1) {
+    return { promotions: [], status_changes: [] };
+  }
+  try {
+    var jsonStr = notes.toString().split("===ACADEMIC===")[1].split("===ALBUM===")[0].split("===JOURNAL===")[0].trim();
+    var parsed = JSON.parse(jsonStr) || {};
+    if (!Array.isArray(parsed.promotions)) parsed.promotions = [];
+    if (!Array.isArray(parsed.status_changes)) parsed.status_changes = [];
+    return parsed;
+  } catch (e) {
+    return { promotions: [], status_changes: [] };
+  }
+}
+
+function stripAcademicMeta(notes) {
+  if (!notes) return "";
+  return notes.toString().replace(/===ACADEMIC===[\s\S]*?(?=(===ALBUM===|===JOURNAL===|$))/g, "").trim();
+}
+
+function buildNotesWithAcademicMeta(notes, meta) {
+  var base = stripAcademicMeta(notes);
+  var compactMeta = {
+    promotions: Array.isArray(meta.promotions) ? meta.promotions : [],
+    status_changes: Array.isArray(meta.status_changes) ? meta.status_changes : []
+  };
+  var marker = "===ACADEMIC=== " + JSON.stringify(compactMeta);
+  return base ? base + "\n" + marker : marker;
+}
+
+function hasPromotionForSchoolYear(meta, schoolYear) {
+  var promotions = Array.isArray(meta.promotions) ? meta.promotions : [];
+  for (var i = 0; i < promotions.length; i++) {
+    if (promotions[i] && promotions[i].school_year === schoolYear) return true;
+  }
+  return false;
+}
+
+function inferSchoolYearForDate(dateStr) {
+  var d = dateStr ? new Date(dateStr) : new Date();
+  if (isNaN(d.getTime())) d = new Date();
+  var year = d.getFullYear();
+  var month = d.getMonth() + 1;
+  var startYear = month >= 6 ? year : year - 1;
+  return startYear + "-" + (startYear + 1);
+}
+
+function massGradeUp(options) {
+  options = options || {};
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("HocSinh");
   var lastRow = sheet.getLastRow();
@@ -738,32 +831,125 @@ function massGradeUp() {
   var colGrade = STUDENT_HEADERS.indexOf("grade") + 1;
   var colStatus = STUDENT_HEADERS.indexOf("status") + 1;
   var colNotes = STUDENT_HEADERS.indexOf("notes") + 1;
+  var colRegDate = STUDENT_HEADERS.indexOf("registration_date") + 1;
 
   var grades = sheet.getRange(2, colGrade, lastRow - 1, 1).getValues();
   var statuses = sheet.getRange(2, colStatus, lastRow - 1, 1).getValues();
+  var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var names = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+  var notesValues = sheet.getRange(2, colNotes, lastRow - 1, 1).getValues();
+  var regValues = sheet.getRange(2, colRegDate, lastRow - 1, 1).getValues();
 
   var countUp = 0;
   var countGrad = 0;
+  var countPaused = 0;
+  var countReturned = 0;
+  var countSkipped = 0;
+  var mode = options.mode || "legacy";
+  var targetSchoolYear = options.targetSchoolYear || inferSchoolYearForDate(options.effectiveDate);
+  var effectiveDate = options.effectiveDate || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  var selectedIds = Array.isArray(options.studentIds) ? options.studentIds.map(function(id) { return id.toString(); }) : [];
+  var useSelection = selectedIds.length > 0;
 
   for (var i = 0; i < grades.length; i++) {
     var rowNum = i + 2;
     var currentStatus = statuses[i][0];
+    var studentId = ids[i][0] ? ids[i][0].toString() : "";
+    if (useSelection && selectedIds.indexOf(studentId) === -1) continue;
+
+    var currentGrade = parseInt(grades[i][0]);
+    var currentNotes = notesValues[i][0] || "";
+    var meta = parseAcademicMeta(currentNotes);
+
+    if (mode === "return_to_study") {
+      sheet.getRange(rowNum, colStatus).setValue("Đang học");
+      sheet.getRange(rowNum, colRegDate).setValue(effectiveDate);
+      meta.status_changes.push({
+        type: "return_to_study",
+        school_year: targetSchoolYear,
+        effective_date: effectiveDate,
+        created_at: new Date().toISOString()
+      });
+      sheet.getRange(rowNum, colNotes).setValue(buildNotesWithAcademicMeta(currentNotes, meta));
+      countReturned++;
+      continue;
+    }
+
+    if (mode === "graduate_leave") {
+      if (currentStatus === "Nghỉ luôn") {
+        countSkipped++;
+        continue;
+      }
+      sheet.getRange(rowNum, colStatus).setValue("Nghỉ luôn");
+      meta.status_changes.push({
+        type: "graduate_leave",
+        school_year: targetSchoolYear,
+        effective_date: effectiveDate,
+        grade: isNaN(currentGrade) ? "" : currentGrade,
+        created_at: new Date().toISOString()
+      });
+      sheet.getRange(rowNum, colNotes).setValue(buildNotesWithAcademicMeta(currentNotes, meta));
+      countGrad++;
+      continue;
+    }
 
     if (currentStatus === "Đang học") {
-      var currentGrade = parseInt(grades[i][0]);
       if (!isNaN(currentGrade)) {
+        if (mode === "grade_up_summer" && hasPromotionForSchoolYear(meta, targetSchoolYear)) {
+          countSkipped++;
+          continue;
+        }
         if (currentGrade >= 12) {
-          // Lớp 12 tốt nghiệp -> chuyển trạng thái thành Nghỉ luôn
           sheet.getRange(rowNum, colStatus).setValue("Nghỉ luôn");
-          sheet.getRange(rowNum, colNotes).setValue("Tự động chuyển tốt nghiệp niên khóa cũ");
+          meta.status_changes.push({
+            type: "graduate_leave",
+            school_year: targetSchoolYear,
+            effective_date: effectiveDate,
+            grade: currentGrade,
+            created_at: new Date().toISOString()
+          });
+          sheet.getRange(rowNum, colNotes).setValue(buildNotesWithAcademicMeta(currentNotes, meta));
           countGrad++;
         } else {
-          // Dưới lớp 12 -> lên lớp 1
           sheet.getRange(rowNum, colGrade).setValue(currentGrade + 1);
+          if (mode === "grade_up_summer") {
+            sheet.getRange(rowNum, colStatus).setValue("Tạm nghỉ");
+            countPaused++;
+          }
+          meta.promotions.push({
+            type: mode === "grade_up_summer" ? "grade_up_summer" : "legacy_grade_up",
+            school_year: targetSchoolYear,
+            effective_date: effectiveDate,
+            from_grade: currentGrade,
+            to_grade: currentGrade + 1,
+            created_at: new Date().toISOString()
+          });
+          sheet.getRange(rowNum, colNotes).setValue(buildNotesWithAcademicMeta(currentNotes, meta));
           countUp++;
         }
       }
+    } else {
+      countSkipped++;
     }
+  }
+
+  if (mode === "grade_up_summer") {
+    return {
+      success: true,
+      message: "Đã lên lớp cho " + countUp + " học sinh; chuyển tạm nghỉ hè cho " + countPaused + " học sinh; tốt nghiệp/nghỉ luôn " + countGrad + " học sinh; bỏ qua " + countSkipped + " học sinh đã xử lý hoặc không phù hợp."
+    };
+  }
+  if (mode === "return_to_study") {
+    return {
+      success: true,
+      message: "Đã cho học lại " + countReturned + " học sinh và cập nhật ngày nhập học năm học " + targetSchoolYear + " là " + effectiveDate + "."
+    };
+  }
+  if (mode === "graduate_leave") {
+    return {
+      success: true,
+      message: "Đã chuyển nghỉ luôn/tốt nghiệp cho " + countGrad + " học sinh; bỏ qua " + countSkipped + " học sinh."
+    };
   }
 
   return {
@@ -850,7 +1036,80 @@ function uploadAlbumPhoto(albumData) {
   var studentId = albumData && albumData.studentId ? albumData.studentId.toString() : "unknown";
   var studentName = albumData && albumData.studentName ? albumData.studentName.toString() : "";
   var folderName = studentId + (studentName ? "_" + studentName : "");
-  return uploadImageToDrive(albumData, "HNT_Albums", folderName);
+  var uploaded = uploadImageToDrive(albumData, "HNT_Albums", folderName);
+  if (!uploaded || !uploaded.success) return uploaded;
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var albumSheet = ss.getSheetByName("AlbumAnh");
+  if (!albumSheet) {
+    initSheets();
+    albumSheet = ss.getSheetByName("AlbumAnh");
+  }
+
+  var createdAt = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+  var photo = {
+    photo_id: "photo_" + new Date().getTime() + "_" + Math.floor(Math.random() * 100000),
+    student_id: studentId,
+    student_name: studentName,
+    url: uploaded.url,
+    file_id: uploaded.fileId,
+    note: albumData && albumData.note ? albumData.note.toString() : "",
+    created_at: createdAt,
+    note_updated_at: "",
+    uploaded_by: "",
+    status: "active"
+  };
+
+  albumSheet.appendRow(ALBUM_HEADERS.map(function(key) {
+    return photo[key] !== undefined ? photo[key] : "";
+  }));
+
+  uploaded.photo = photo;
+  uploaded.photo_id = photo.photo_id;
+  return uploaded;
+}
+
+function findAlbumPhotoRow(photoId) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("AlbumAnh");
+  if (!sheet || sheet.getLastRow() <= 1) return { sheet: sheet, rowIndex: -1 };
+  var colPhotoId = ALBUM_HEADERS.indexOf("photo_id") + 1;
+  var ids = sheet.getRange(2, colPhotoId, sheet.getLastRow() - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i][0] && ids[i][0].toString() === photoId.toString()) {
+      return { sheet: sheet, rowIndex: i + 2 };
+    }
+  }
+  return { sheet: sheet, rowIndex: -1 };
+}
+
+function updateAlbumPhoto(photoId, photoData) {
+  if (!photoId) return { success: false, error: "Thiếu mã ảnh album." };
+  var found = findAlbumPhotoRow(photoId);
+  if (!found.sheet || found.rowIndex === -1) {
+    return { success: false, error: "Không tìm thấy ảnh album." };
+  }
+
+  var currentValues = found.sheet.getRange(found.rowIndex, 1, 1, ALBUM_HEADERS.length).getValues()[0];
+  var photo = {};
+  for (var i = 0; i < ALBUM_HEADERS.length; i++) photo[ALBUM_HEADERS[i]] = currentValues[i];
+
+  if (photoData.note !== undefined) {
+    photo.note = photoData.note;
+    photo.note_updated_at = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+  }
+  if (photoData.status !== undefined) photo.status = photoData.status;
+
+  found.sheet.getRange(found.rowIndex, 1, 1, ALBUM_HEADERS.length).setValues([ALBUM_HEADERS.map(function(key) {
+    return photo[key] !== undefined ? photo[key] : "";
+  })]);
+
+  return { success: true, photo: photo };
+}
+
+function deleteAlbumPhoto(photoId) {
+  if (!photoId) return { success: false, error: "Thiếu mã ảnh album." };
+  return updateAlbumPhoto(photoId, { status: "deleted" });
 }
 
 // 7. KHÔI PHỤC DỮ LIỆU ĐÈ TỪ FILE BACKUP JSON
@@ -1026,6 +1285,7 @@ function getPublicReport(studentId, token) {
     grade: student.grade,
     school: student.school,
     class_school: student.class_school,
+    status: student.status,
     campuses_sessions: student.campuses_sessions,
     paid_until: student.paid_until,
     registration_date: student.registration_date,
