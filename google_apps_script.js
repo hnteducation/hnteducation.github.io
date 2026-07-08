@@ -62,6 +62,11 @@ var ALBUM_HEADERS = [
   "note", "created_at", "note_updated_at", "uploaded_by", "status"
 ];
 
+var JOURNAL_HEADERS = [
+  "journal_id", "student_id", "student_name", "date", "title",
+  "note", "created_at", "updated_at", "status"
+];
+
 function getSecurityProperties() {
   var props = PropertiesService.getScriptProperties();
   var masterPass = props.getProperty("HNT_MASTER_PASSCODE") || PASSCODE;
@@ -381,6 +386,12 @@ function handleRequest(e, method) {
       result = requirePermission(auth, "canEditPrivateAlbum") || updateAlbumPhoto(params.photoId, params.photoData || {});
     } else if (action === "deleteAlbumPhoto") {
       result = requirePermission(auth, "canEditPrivateAlbum") || deleteAlbumPhoto(params.photoId);
+    } else if (action === "addStudentJournal") {
+      result = requirePermission(auth, "canEditStudent") || addStudentJournal(params.journalData || {});
+    } else if (action === "updateStudentJournal") {
+      result = requirePermission(auth, "canEditStudent") || updateStudentJournal(params.journalId, params.journalData || {});
+    } else if (action === "deleteStudentJournal") {
+      result = requirePermission(auth, "canEditStudent") || deleteStudentJournal(params.journalId);
     } else if (action === "restoreBackup") {
       result = requirePermission(auth, "canRestoreBackup") || restoreBackup(params.backupData);
     } else if (action === "createParentToken") {
@@ -496,6 +507,32 @@ function initSheets() {
       }
     }
   }
+
+  // 4. Sheet NhatKyHocSinh: mỗi dòng nhật ký là một record riêng để lưu số lượng lớn
+  var journalSheet = ss.getSheetByName("NhatKyHocSinh");
+  if (!journalSheet) {
+    journalSheet = ss.insertSheet("NhatKyHocSinh");
+    journalSheet.appendRow(JOURNAL_HEADERS);
+    journalSheet.getRange(1, 1, 1, JOURNAL_HEADERS.length)
+      .setFontWeight("bold")
+      .setBackground("#dbeafe");
+  } else {
+    var lastJournalCol = journalSheet.getLastColumn();
+    var currentJournalHeaders = [];
+    if (lastJournalCol > 0) {
+      currentJournalHeaders = journalSheet.getRange(1, 1, 1, lastJournalCol).getValues()[0];
+    }
+    for (var n = 0; n < JOURNAL_HEADERS.length; n++) {
+      var journalHeaderName = JOURNAL_HEADERS[n];
+      if (currentJournalHeaders.indexOf(journalHeaderName) === -1) {
+        var nextJournalCol = journalSheet.getLastColumn() + 1;
+        journalSheet.getRange(1, nextJournalCol).setValue(journalHeaderName)
+          .setFontWeight("bold")
+          .setBackground("#dbeafe");
+        currentJournalHeaders.push(journalHeaderName);
+      }
+    }
+  }
 }
 
 // 1. LẤY TOÀN BỘ DỮ LIỆU
@@ -522,11 +559,15 @@ function getData(auth) {
   var studentSheet = ss.getSheetByName("HocSinh");
   var paymentSheet = ss.getSheetByName("HocPhi");
   var albumSheet = ss.getSheetByName("AlbumAnh");
+  var journalSheet = ss.getSheetByName("NhatKyHocSinh");
 
   var students = getSheetRowsAsObjects(studentSheet, STUDENT_HEADERS);
   var payments = getSheetRowsAsObjects(paymentSheet, PAYMENT_HEADERS);
   var albums = albumSheet ? getSheetRowsAsObjects(albumSheet, ALBUM_HEADERS).filter(function(photo) {
     return photo.status !== "deleted";
+  }) : [];
+  var journals = journalSheet ? getSheetRowsAsObjects(journalSheet, JOURNAL_HEADERS).filter(function(entry) {
+    return entry.status !== "deleted";
   }) : [];
 
   if (auth && auth.permissions && (!auth.permissions.canViewPayments || !auth.permissions.canViewAllPayments)) {
@@ -540,7 +581,8 @@ function getData(auth) {
     success: true,
     students: redactStudentsForRole(students, auth),
     payments: payments,
-    albums: albums
+    albums: albums,
+    journals: journals
   };
 }
 
@@ -1110,6 +1152,81 @@ function updateAlbumPhoto(photoId, photoData) {
 function deleteAlbumPhoto(photoId) {
   if (!photoId) return { success: false, error: "Thiếu mã ảnh album." };
   return updateAlbumPhoto(photoId, { status: "deleted" });
+}
+
+function getOrCreateJournalSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("NhatKyHocSinh");
+  if (!sheet) {
+    initSheets();
+    sheet = ss.getSheetByName("NhatKyHocSinh");
+  }
+  return sheet;
+}
+
+function addStudentJournal(journalData) {
+  if (!journalData || !journalData.student_id) {
+    return { success: false, error: "Thiếu mã học sinh để lưu nhật ký." };
+  }
+  var sheet = getOrCreateJournalSheet();
+  var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+  var entry = {
+    journal_id: journalData.journal_id || ("journal_" + new Date().getTime() + "_" + Math.floor(Math.random() * 100000)),
+    student_id: journalData.student_id.toString(),
+    student_name: journalData.student_name || "",
+    date: journalData.date || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd"),
+    title: journalData.title || "Theo dõi học sinh",
+    note: journalData.note || "",
+    created_at: journalData.created_at || now,
+    updated_at: journalData.updated_at || "",
+    status: "active"
+  };
+
+  sheet.appendRow(JOURNAL_HEADERS.map(function(key) {
+    return entry[key] !== undefined ? entry[key] : "";
+  }));
+  return { success: true, journal: entry };
+}
+
+function findStudentJournalRow(journalId) {
+  var sheet = getOrCreateJournalSheet();
+  if (!sheet || sheet.getLastRow() <= 1) return { sheet: sheet, rowIndex: -1 };
+  var colJournalId = JOURNAL_HEADERS.indexOf("journal_id") + 1;
+  var ids = sheet.getRange(2, colJournalId, sheet.getLastRow() - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i][0] && ids[i][0].toString() === journalId.toString()) {
+      return { sheet: sheet, rowIndex: i + 2 };
+    }
+  }
+  return { sheet: sheet, rowIndex: -1 };
+}
+
+function updateStudentJournal(journalId, journalData) {
+  if (!journalId) return { success: false, error: "Thiếu mã dòng nhật ký." };
+  var found = findStudentJournalRow(journalId);
+  if (!found.sheet || found.rowIndex === -1) {
+    return { success: false, error: "Không tìm thấy dòng nhật ký." };
+  }
+
+  var currentValues = found.sheet.getRange(found.rowIndex, 1, 1, JOURNAL_HEADERS.length).getValues()[0];
+  var entry = {};
+  for (var i = 0; i < JOURNAL_HEADERS.length; i++) entry[JOURNAL_HEADERS[i]] = currentValues[i];
+
+  ["student_id", "student_name", "date", "title", "note", "status"].forEach(function(key) {
+    if (journalData[key] !== undefined) entry[key] = journalData[key];
+  });
+  entry.updated_at = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+
+  found.sheet.getRange(found.rowIndex, 1, 1, JOURNAL_HEADERS.length).setValues([JOURNAL_HEADERS.map(function(key) {
+    return entry[key] !== undefined ? entry[key] : "";
+  })]);
+
+  return { success: true, journal: entry };
+}
+
+function deleteStudentJournal(journalId) {
+  if (!journalId) return { success: false, error: "Thiếu mã dòng nhật ký." };
+  return updateStudentJournal(journalId, { status: "deleted" });
 }
 
 // 7. KHÔI PHỤC DỮ LIỆU ĐÈ TỪ FILE BACKUP JSON

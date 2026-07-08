@@ -1548,6 +1548,7 @@
             students: [],
             payments: [],
             albums: [],
+            journals: [],
             activeTab: 'quick-input',
             activeAdminSubTab: 'dashboard',
             selectedStudent: null,
@@ -2105,11 +2106,13 @@
             const cachedStudents = localStorage.getItem('hnt_cached_students');
             const cachedPayments = localStorage.getItem('hnt_cached_payments');
             const cachedAlbums = localStorage.getItem('hnt_cached_albums');
+            const cachedJournals = localStorage.getItem('hnt_cached_journals');
             if (cachedStudents && cachedPayments) {
                 try {
                     state.students = JSON.parse(cachedStudents);
                     state.payments = JSON.parse(cachedPayments);
                     state.albums = cachedAlbums ? JSON.parse(cachedAlbums) : [];
+                    state.journals = cachedJournals ? JSON.parse(cachedJournals) : [];
                     calculateStats();
                     renderStudentsTable();
                     populateSessionFilterDropdown();
@@ -2487,11 +2490,13 @@
                     state.students = result.students || [];
                     state.payments = result.payments || [];
                     state.albums = result.albums || [];
+                    state.journals = result.journals || [];
 
                     // Lưu dữ liệu vào cache LocalStorage để xem tức thời ở lần sau
                     localStorage.setItem('hnt_cached_students', JSON.stringify(state.students));
                     localStorage.setItem('hnt_cached_payments', JSON.stringify(state.payments));
                     localStorage.setItem('hnt_cached_albums', JSON.stringify(state.albums));
+                    localStorage.setItem('hnt_cached_journals', JSON.stringify(state.journals));
 
                     if (state.isPublicView) {
                         renderPublicScheduleGrid();
@@ -2776,7 +2781,7 @@
                         <div class="flex items-center gap-2">
                             ${avatarHtml}
                             <div>
-                                <span class="font-bold text-slate-800 text-[11px] block">${escapeHtml(s.name)}</span>
+                                <span class="font-bold text-slate-800 text-[11px] block">${getGenderIconHtml(s.gender)}${escapeHtml(s.name)}</span>
                                 <span class="text-[9px] text-slate-400">Khối ${s.grade} - ${escapeHtml(s.school || 'Tự do')}</span>
                             </div>
                         </div>
@@ -2811,7 +2816,7 @@
                         <div class="flex items-center gap-2">
                             ${avatarHtml}
                             <div>
-                                <span class="font-bold text-slate-800 text-[11px] block">${escapeHtml(s.name)}</span>
+                                <span class="font-bold text-slate-800 text-[11px] block">${getGenderIconHtml(s.gender)}${escapeHtml(s.name)}</span>
                                 <span class="text-[9px] text-slate-400">Khối ${s.grade} - ${escapeHtml(s.school || 'Tự do')}</span>
                             </div>
                         </div>
@@ -2856,7 +2861,7 @@
             }
 
             // Cập nhật UI Summary box
-            document.getElementById('qp-sum-name').textContent = student.name;
+            document.getElementById('qp-sum-name').innerHTML = `${getGenderIconHtml(student.gender)}${escapeHtml(student.name)}`;
             document.getElementById('qp-sum-id').textContent = student.id;
             document.getElementById('qp-sum-class-info').textContent = `${student.school || 'Trường tự do'} - Lớp ${student.grade || 'Mới'}`;
             document.getElementById('qp-sum-reg-date').textContent = student.registration_date ? formatDateToVN(student.registration_date) : '--';
@@ -2917,7 +2922,7 @@
                 const tag = document.createElement('span');
                 tag.className = "inline-flex items-center gap-1 bg-brand-50 text-brand-700 border border-brand-100 rounded-full px-2 py-0.5 text-[10px] font-bold shadow-3xs select-none";
                 tag.innerHTML = `
-                    <span>Lớp ${s.grade} - ${escapeHtml(s.name)}</span>
+                    <span>Lớp ${s.grade} - ${getGenderIconHtml(s.gender, 'mx-0.5 select-none')}${escapeHtml(s.name)}</span>
                     <button type="button" onclick="removeGroupStudent('${s.id}')" class="text-slate-400 hover:text-red-500 transition ml-0.5">
                         <i class="fa-solid fa-circle-xmark text-[10px]"></i>
                     </button>
@@ -2962,7 +2967,7 @@
                 const item = document.createElement('div');
                 item.className = "px-3 py-1.5 hover:bg-slate-50 cursor-pointer text-slate-700 font-semibold text-[11px] flex justify-between items-center border-b border-slate-100 transition";
                 item.innerHTML = `
-                    <span>Lớp ${s.grade} - ${escapeHtml(s.name)}</span>
+                    <span>Lớp ${s.grade} - ${getGenderIconHtml(s.gender, 'mx-0.5 select-none')}${escapeHtml(s.name)}</span>
                     <span class="text-[9px] bg-slate-100 px-1 py-0.5 rounded text-slate-500 font-bold">${s.id}</span>
                 `;
                 item.onclick = () => {
@@ -3460,12 +3465,14 @@
                 `;
             } else {
                 filtered.forEach((p, idx) => {
+                    const paymentStudent = state.students.find(s => s.id && p.student_id && s.id.toString() === p.student_id.toString());
+                    const paymentGenderIcon = getGenderIconHtml(paymentStudent ? paymentStudent.gender : '', 'mr-1 select-none');
                     const tr = document.createElement('tr');
                     tr.className = "hover:bg-slate-50/50 transition border-b border-slate-100";
                     tr.innerHTML = `
                         <td class="py-2 px-3 text-center text-slate-400 font-bold">${idx + 1}</td>
                         <td class="py-2 px-3 font-semibold text-slate-500">${p.student_id || '--'}</td>
-                        <td class="py-2 px-3 font-bold text-slate-800">${escapeHtml(p.student_name || '--')}</td>
+                        <td class="py-2 px-3 font-bold text-slate-800">${paymentGenderIcon}${escapeHtml(p.student_name || '--')}</td>
                         <td class="py-2 px-3 font-medium text-slate-600 text-center">${p.payment_date ? formatDateToVN(p.payment_date) : '--'}</td>
                         <td class="py-2 px-3 font-bold text-green-700 text-right">${parseInt(p.amount || 0).toLocaleString('vi-VN')}đ</td>
                         <td class="py-2 px-3 font-medium text-slate-500 text-center">${p.payment_method || 'Chuyển khoản'}</td>
@@ -3726,7 +3733,7 @@
                             ${day}
                         </div>
                         <div>
-                            <span class="font-extrabold text-slate-800 block">${escapeHtml(s.name)}</span>
+                            <span class="font-extrabold text-slate-800 block">${getGenderIconHtml(s.gender)}${escapeHtml(s.name)}</span>
                             <span class="text-[9px] text-slate-400">Ngày sinh: ${day}/${parts[1]} (${age} tuổi)</span>
                         </div>
                     </div>
@@ -4126,7 +4133,7 @@
             state.detailStudent = student;
             state.editingJournalId = '';
 
-            document.getElementById('det-name').textContent = student.name;
+            document.getElementById('det-name').innerHTML = `${getGenderIconHtml(student.gender)}${escapeHtml(student.name)}`;
             document.getElementById('det-id').textContent = `ID: ${student.id}`;
             document.getElementById('det-grade').textContent = `Khối ${student.grade}`;
 
@@ -4176,9 +4183,7 @@
                 paidUntilEl.className = `font-black ${detailTuitionInfo.colorClass}`;
             }
             // 1. Lấy chuỗi HTML của icon dựa vào giới tính của student
-            const genderIcon = student.gender === 'Nữ'
-                ? `<i class="fa-solid fa-venus text-pink-500 mr-1 select-none"></i>`
-                : (student.gender === 'Nam' ? `<i class="fa-solid fa-mars text-sky-500 mr-1 select-none"></i>` : `<i class="fa-solid fa-user text-slate-400 mr-1 select-none"></i>`);
+            const genderIcon = getGenderIconHtml(student.gender, 'mr-1 select-none');
 
             // 2. Định dạng chuỗi ngày sinh
             const birthDateText = student.birth_date ? formatDateToVN(student.birth_date) : '--';
@@ -4508,7 +4513,7 @@
                     item.className = "p-2 hover:bg-slate-50 cursor-pointer flex justify-between items-center border-b border-slate-100";
                     item.innerHTML = `
                         <div>
-                            <span class="font-bold text-slate-750 block">${escapeHtml(s.name)}</span>
+                            <span class="font-bold text-slate-750 block">${getGenderIconHtml(s.gender)}${escapeHtml(s.name)}</span>
                             <span class="text-[9px] text-slate-400">Khối ${s.grade} - ${escapeHtml(s.school || 'Tự do')}</span>
                         </div>
                         <span class="text-[9px] bg-slate-100 text-slate-600 font-bold px-1 py-0.5 rounded">${s.id}</span>
@@ -4926,7 +4931,7 @@
                         <div class="flex items-center gap-3 cursor-pointer group" onclick="openStudentDetailModal('${s.id}')">
                             ${cardAvatarHtml}
                             <div>
-                                <h4 class="font-extrabold text-slate-800 group-hover:text-brand-500 text-xs transition-colors duration-150">${escapeHtml(s.name)}</h4>
+                                <h4 class="font-extrabold text-slate-800 group-hover:text-brand-500 text-xs transition-colors duration-150">${getGenderIconHtml(s.gender)}${escapeHtml(s.name)}</h4>
                                 <p class="text-[10px] text-slate-500 mt-0.5">Khối ${s.grade} - Lớp: ${escapeHtml(s.class_school || 'Trống')} - Trường: ${escapeHtml(s.school || 'Tự do')}</p>
                             </div>
                         </div>
@@ -5144,7 +5149,7 @@
                         ${avatarHtml}
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-1">
-                                <h4 class="font-extrabold text-slate-900 group-hover:text-brand-500 text-xs truncate max-w-[150px] transition-colors duration-150">${escapeHtml(s.name)}</h4>
+                                <h4 class="font-extrabold text-slate-900 group-hover:text-brand-500 text-xs truncate max-w-[150px] transition-colors duration-150">${getGenderIconHtml(s.gender)}${escapeHtml(s.name)}</h4>
                                 <span class="text-[8px] font-black text-slate-400">#${s.id}</span>
                             </div>
                             <p class="text-[9px] text-slate-400 font-bold mt-0.5"><i class="fa-solid fa-school mr-0.5"></i>Lớp ${s.grade} - ${escapeHtml(s.school || 'Tự do')}</p>
@@ -5616,6 +5621,7 @@
                 recentClassPayments.forEach(p => {
                     const student = classStudents.find(s => s.id && p.student_id && s.id.toString() === p.student_id.toString());
                     const name = student ? student.name : 'Ẩn danh';
+                    const genderIcon = getGenderIconHtml(student ? student.gender : '', 'mr-1 select-none');
 
                     const row = document.createElement('tr');
                     row.className = "hover:bg-slate-50/50 transition text-[10.5px]";
@@ -5625,7 +5631,7 @@
                         : '--';
 
                     row.innerHTML = `
-                        <td class="py-2 px-3 font-bold text-slate-700 max-w-[90px] truncate" title="${escapeHtml(name)}">${escapeHtml(name)}</td>
+                        <td class="py-2 px-3 font-bold text-slate-700 max-w-[90px] truncate" title="${escapeHtml(name)}">${genderIcon}${escapeHtml(name)}</td>
                         <td class="py-2 px-3 font-black text-brand-900 font-mono">${parseInt(p.amount || 0).toLocaleString('vi-VN')}đ</td>
                         <td class="py-2 px-3 text-slate-600 font-semibold font-mono">${p.payment_date ? formatDateToVN(p.payment_date) : '--'}</td>
                         <td class="py-2 px-3 text-slate-500 font-semibold font-mono">${cycleStr}</td>
@@ -6046,7 +6052,7 @@
             if (!student) return;
 
             const modal = document.getElementById('history-modal');
-            document.getElementById('history-modal-title').textContent = student.name;
+            document.getElementById('history-modal-title').innerHTML = `${getGenderIconHtml(student.gender)}${escapeHtml(student.name)}`;
             document.getElementById('history-modal-subtitle').textContent = `Mã: ${student.id} | Khối: ${student.grade}`;
 
             const histories = state.payments.filter(p => p.student_id.toString() === studentId.toString());
@@ -6167,7 +6173,7 @@
                         <div class="w-9 h-9 rounded-full bg-brand-50 text-brand-700 font-black text-xs flex items-center justify-center">${escapeHtml((s.name || '?').charAt(0))}</div>
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-2 flex-wrap">
-                                <span class="font-black text-slate-800 text-xs">${escapeHtml(s.name || '')}</span>
+                                <span class="font-black text-slate-800 text-xs">${getGenderIconHtml(s.gender)}${escapeHtml(s.name || '')}</span>
                                 <span class="text-[9px] font-bold bg-slate-100 text-slate-500 rounded px-1.5 py-0.5 select-all">${escapeHtml(sid)}</span>
                                 <span class="text-[9px] font-bold border rounded px-1.5 py-0.5 ${s.status === 'Đang học' ? 'bg-green-50 text-green-700 border-green-100' : (s.status === 'Tạm nghỉ' ? 'bg-amber-50 text-amber-700 border-amber-100' : 'bg-slate-50 text-slate-500 border-slate-100')}">${escapeHtml(s.status || 'Đang học')}</span>
                             </div>
@@ -6451,6 +6457,12 @@
             str = str.replace(/\u0300|\u0301|\u0309|\u0303|\u0323/g, "");
             str = str.replace(/\u02c6|\u0306|\u031b/g, "");
             return str;
+        }
+
+        function getGenderIconHtml(gender, extraClass = 'mr-1 select-none') {
+            if (gender === 'Nữ') return `<i class="fa-solid fa-venus text-pink-500 ${extraClass}"></i>`;
+            if (gender === 'Nam') return `<i class="fa-solid fa-mars text-sky-500 ${extraClass}"></i>`;
+            return `<i class="fa-solid fa-user text-slate-400 ${extraClass}"></i>`;
         }
 
         function escapeHtml(str) {
@@ -6828,12 +6840,16 @@
             if (!note && !title) return null;
             const createdAt = (entry.created_at || entry.createdAt || new Date().toISOString()).toString();
             return {
-                id: (entry.id || entry.key || createdAt || `journal_${index}`).toString(),
+                id: (entry.journal_id || entry.id || entry.key || createdAt || `journal_${index}`).toString(),
+                journal_id: (entry.journal_id || entry.id || entry.key || '').toString(),
+                student_id: (entry.student_id || entry.studentId || '').toString(),
+                student_name: (entry.student_name || entry.studentName || '').toString(),
                 date: (entry.date || entry.created_date || '').toString() || ensureYYYYMMDD(new Date()),
                 title: title || 'Theo dõi học sinh',
                 note,
                 created_at: createdAt,
                 updated_at: (entry.updated_at || entry.updatedAt || '').toString(),
+                status: (entry.status || 'active').toString(),
                 order: entry.order !== undefined ? entry.order : index
             };
         }
@@ -6848,6 +6864,31 @@
             } catch(e) {
                 return [];
             }
+        }
+
+        function getStudentJournalRows(studentId) {
+            if (!studentId) return [];
+            return (state.journals || [])
+                .filter(entry => entry.student_id && entry.student_id.toString() === studentId.toString() && entry.status !== 'deleted')
+                .map((entry, index) => normalizeJournalEntry(entry, index))
+                .filter(Boolean);
+        }
+
+        function getStudentJournalForStudent(student) {
+            if (!student) return [];
+            const sheetEntries = getStudentJournalRows(student.id);
+            const legacyEntries = getStudentJournal(student.notes).map((entry, index) => ({
+                ...entry,
+                is_legacy_notes: !entry.journal_id,
+                order: sheetEntries.length + index
+            }));
+            const seen = new Set();
+            return [...sheetEntries, ...legacyEntries].filter(entry => {
+                const key = entry.journal_id || entry.id || `${entry.date}-${entry.title}-${entry.note}`;
+                if (!key || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
         }
 
         function buildStudentNotesFull(noteText, album = [], journal = [], academicMeta = null) {
@@ -6929,6 +6970,24 @@
             (photos || []).forEach(photo => syncLocalAlbumPhoto(photo));
         }
 
+        function syncLocalJournalEntry(entry, remove = false) {
+            if (!entry) return;
+            const journalId = (entry.journal_id || entry.id || '').toString();
+            if (!journalId) return;
+            state.journals = state.journals || [];
+            const idx = state.journals.findIndex(item => (item.journal_id || item.id || '').toString() === journalId);
+            if (remove || entry.status === 'deleted') {
+                if (idx !== -1) state.journals.splice(idx, 1);
+            } else if (idx !== -1) {
+                state.journals[idx] = { ...state.journals[idx], ...entry, journal_id: journalId };
+            } else {
+                state.journals.push({ ...entry, journal_id: journalId });
+            }
+            try {
+                localStorage.setItem('hnt_cached_journals', JSON.stringify(state.journals));
+            } catch(e) {}
+        }
+
         async function saveStudentAlbum(album, successMessage) {
             const student = state.detailStudent || state.selectedStudent;
             if (!student) return false;
@@ -6955,7 +7014,7 @@
             const dateInput = document.getElementById('det-journal-date');
             if (dateInput && !dateInput.value) dateInput.value = ensureYYYYMMDD(new Date());
             if (!list) return;
-            const entries = getStudentJournal(student && student.notes).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+            const entries = getStudentJournalForStudent(student).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
             if (entries.length === 0) {
                 list.innerHTML = '<div class="text-[10px] text-slate-400 italic py-2 text-center">Chưa có nhật ký theo dõi.</div>';
                 return;
@@ -7006,9 +7065,9 @@
             if (!requireClientPermission('canEditStudent', 'Tài khoản hiện tại không được sửa nhật ký học sinh.')) return;
             const student = state.detailStudent || state.selectedStudent;
             if (!student) return;
-            const entry = getStudentJournal(student.notes).find(item => item.id === entryId);
+            const entry = getStudentJournalForStudent(student).find(item => item.id === entryId || item.journal_id === entryId);
             if (!entry) return;
-            state.editingJournalId = entry.id;
+            state.editingJournalId = entry.journal_id || entry.id;
             document.getElementById('det-journal-date').value = entry.date || ensureYYYYMMDD(new Date());
             document.getElementById('det-journal-title').value = entry.title || '';
             document.getElementById('det-journal-note').value = entry.note || '';
@@ -7020,9 +7079,27 @@
             const student = state.detailStudent || state.selectedStudent;
             if (!student) return;
             if (!confirm('Xóa dòng nhật ký này khỏi hồ sơ học sinh?')) return;
-            const journal = getStudentJournal(student.notes).filter(item => item.id !== entryId);
+            const entry = getStudentJournalForStudent(student).find(item => item.id === entryId || item.journal_id === entryId);
+            if (!entry) return;
             if (state.editingJournalId === entryId) state.editingJournalId = '';
-            await persistStudentJournal(student, journal, 'Đã xóa nhật ký', 'Dòng theo dõi đã được gỡ khỏi hồ sơ học sinh.');
+            if (entry.journal_id && !entry.is_legacy_notes) {
+                showLoader('Đang xóa nhật ký...', 'Đang cập nhật dòng nhật ký học sinh.');
+                try {
+                    const result = await safeFetch('deleteStudentJournal', { journalId: entry.journal_id });
+                    if (!result || !result.success) {
+                        showToast('error', 'Không thể xóa nhật ký', result ? result.error : 'API không phản hồi.');
+                        return;
+                    }
+                    syncLocalJournalEntry({ ...entry, status: 'deleted' }, true);
+                    renderStudentJournal(state.detailStudent || student);
+                    showToast('success', 'Đã xóa nhật ký', 'Dòng theo dõi đã được gỡ khỏi hồ sơ học sinh.');
+                } finally {
+                    hideLoader();
+                }
+            } else {
+                const journal = getStudentJournal(student.notes).filter(item => item.id !== entry.id);
+                await persistStudentJournal(student, journal, 'Đã xóa nhật ký', 'Dòng theo dõi đã được gỡ khỏi hồ sơ học sinh.');
+            }
         }
 
         async function saveStudentJournalEntry() {
@@ -7037,30 +7114,59 @@
                 return;
             }
 
-            const journal = getStudentJournal(student.notes);
             const editingId = state.editingJournalId;
-            if (editingId) {
-                const index = journal.findIndex(item => item.id === editingId);
-                if (index !== -1) {
-                    journal[index] = { ...journal[index], date, title, note, updated_at: new Date().toISOString() };
-                } else {
-                    state.editingJournalId = '';
-                    journal.push({ id: `journal_${Date.now()}`, date, title, note, created_at: new Date().toISOString(), updated_at: '' });
-                }
-            } else {
-                journal.push({ id: `journal_${Date.now()}`, date, title, note, created_at: new Date().toISOString(), updated_at: '' });
-            }
+            const existingEntry = editingId
+                ? getStudentJournalForStudent(student).find(item => item.id === editingId || item.journal_id === editingId)
+                : null;
 
-            const saved = await persistStudentJournal(
-                student,
-                journal,
-                editingId ? 'Đã cập nhật nhật ký' : 'Đã lưu nhật ký',
-                editingId ? 'Dòng theo dõi đã được chỉnh sửa.' : 'Dòng theo dõi mới đã được thêm vào hồ sơ học sinh.'
-            );
-            if (saved) {
+            showLoader(editingId ? 'Đang cập nhật nhật ký...' : 'Đang lưu nhật ký...', 'Đang ghi dòng theo dõi học sinh vào kho nhật ký.');
+            try {
+                if (existingEntry && existingEntry.is_legacy_notes) {
+                    const journal = getStudentJournal(student.notes);
+                    const index = journal.findIndex(item => item.id === existingEntry.id);
+                    if (index !== -1) journal[index] = { ...journal[index], date, title, note, updated_at: new Date().toISOString() };
+                    const saved = await persistStudentJournal(
+                        student,
+                        journal,
+                        'Đã cập nhật nhật ký',
+                        'Dòng theo dõi đã được chỉnh sửa.'
+                    );
+                    if (!saved) return;
+                } else if (existingEntry && existingEntry.journal_id) {
+                    const result = await safeFetch('updateStudentJournal', {
+                        journalId: existingEntry.journal_id,
+                        journalData: { date, title, note }
+                    });
+                    if (!result || !result.success) {
+                        showToast('error', 'Không thể lưu nhật ký', result ? result.error : 'API không phản hồi.');
+                        return;
+                    }
+                    syncLocalJournalEntry(result.journal);
+                    renderStudentJournal(state.detailStudent || student);
+                    showToast('success', 'Đã cập nhật nhật ký', 'Dòng theo dõi đã được chỉnh sửa.');
+                } else {
+                    const result = await safeFetch('addStudentJournal', {
+                        journalData: {
+                            student_id: student.id,
+                            student_name: student.name,
+                            date,
+                            title,
+                            note
+                        }
+                    });
+                    if (!result || !result.success) {
+                        showToast('error', 'Không thể lưu nhật ký', result ? result.error : 'API không phản hồi.');
+                        return;
+                    }
+                    syncLocalJournalEntry(result.journal);
+                    renderStudentJournal(state.detailStudent || student);
+                    showToast('success', 'Đã lưu nhật ký', 'Dòng theo dõi mới đã được thêm vào kho nhật ký học sinh.');
+                }
                 state.editingJournalId = '';
                 document.getElementById('det-journal-title').value = '';
                 document.getElementById('det-journal-note').value = '';
+            } finally {
+                hideLoader();
             }
         }
 
@@ -7688,6 +7794,7 @@
                     state.students = normalizePublicScheduleStudents(decoded.students || [], decoded.payments || []);
                     state.payments = [];
                     state.albums = [];
+                    state.journals = [];
                     state.excludedSessions = decoded.excluded || [];
                     state.publicScheduleFallback = [];
                     isStatic = true;
@@ -7729,6 +7836,7 @@
                         state.students = state.publicScheduleFallback;
                         state.payments = [];
                         state.albums = [];
+                        state.journals = [];
                         isStatic = true;
                     }
                 } catch(e) {
@@ -7834,6 +7942,7 @@ publicView.innerHTML = `
                 state.students = mergePublicScheduleWithFallback(result.students || [], state.publicScheduleFallback || []);
                 state.payments = [];
                 state.albums = [];
+                state.journals = [];
                 renderPublicScheduleGrid();
             } catch(err) {
                 console.error(err);
