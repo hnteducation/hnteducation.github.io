@@ -160,7 +160,7 @@ const browser = vm.createContext({ console, Date, crypto: crypto.webcrypto, Text
 });
 browser.DEFAULT_TUITION_RATE = 500000;
 vm.runInContext(html.slice(html.indexOf('        const apiFlights'), html.indexOf('        // KHI TRANG WEB')), browser);
-['paymentISODate', 'paymentMonthBoundary', 'paymentAddDays', 'splitPaymentPeriod', 'allocatePaymentAmount', 'assertPaymentPeriodAllowed', 'ensureYYYYMMDD', 'formatDateToYYYYMMDD', 'formatDateToVN', 'addDays', 'addMonthsToDate', 'getDaysDifferenceFromToday', 'getTuitionCycleInfo', 'getStudentAcademicMeta', 'getStudentPaymentsForTimelineMonth', 'getStudentTuitionTimelineMonthInfo', 'normalizeStudyStart', 'inferStudyStartPrecision'].forEach(name => vm.runInContext(fn(name), browser));
+['paymentISODate', 'paymentMonthBoundary', 'paymentAddDays', 'splitPaymentPeriod', 'allocatePaymentAmount', 'assertPaymentPeriodAllowed', 'ensureYYYYMMDD', 'formatDateToYYYYMMDD', 'formatDateToVN', 'addDays', 'addMonthsToDate', 'getDaysDifferenceFromToday', 'getTuitionCycleInfo', 'getStudentAcademicMeta', 'getStudentPaymentsForTimelineMonth', 'getStudentPaidMonthCoverage', 'getStudentTuitionTimelineMonthInfo', 'normalizeStudyStart', 'inferStudyStartPrecision'].forEach(name => vm.runInContext(fn(name), browser));
 (async () => {
   const [a, b] = await Promise.all([browser.safeFetch('addPayment', { paymentData: { amount: 42 } }), browser.safeFetch('addPayment', { paymentData: { amount: 42 } })]);
   assert(a.success && b.success);

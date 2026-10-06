@@ -2826,11 +2826,21 @@
 
         function getPaymentPeriodLabel(start, end) {
             const a = paymentISODate(start), b = paymentISODate(end);
-            const monthA = String(a.getUTCMonth() + 1) + '/' + a.getUTCFullYear();
-            const monthB = String(b.getUTCMonth() + 1) + '/' + b.getUTCFullYear();
-            const last = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth() + 1, 0)).getUTCDate();
-            if (a.getUTCDate() === 1 && b.getUTCDate() === last) return monthA === monthB ? 'tháng ' + monthA : 'các tháng ' + monthA + ' đến ' + monthB;
-            return 'từ ' + formatDateToVN(start) + ' đến ' + formatDateToVN(end);
+            if (start > end) throw new Error('Ngày kết thúc phải từ ngày bắt đầu trở đi.');
+            const cursor = new Date(Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), 1));
+            const months = [], partial = [];
+            while (cursor <= b) {
+                if (months.length >= 121) throw new Error('Kỳ thu quá dài.');
+                const label = (cursor.getUTCMonth() + 1) + '/' + cursor.getUTCFullYear();
+                const monthStart = cursor.toISOString().slice(0, 10);
+                const monthEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+                const from = start > monthStart ? start : monthStart;
+                const to = end < monthEnd ? end : monthEnd;
+                months.push(label);
+                if (from !== monthStart || to !== monthEnd) partial.push('tháng ' + label + ': ' + formatDateToVN(from) + '–' + formatDateToVN(to));
+                cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+            }
+            return 'tháng ' + months.join(', ') + (partial.length ? ' (' + partial.join('; ') + ')' : '');
         }
 
         function getSuggestedPaymentPeriod(student, cycle) {
@@ -4254,7 +4264,7 @@
                     const dotColor = monthInfo.dotColor;
 
                     gridHtml += `
-                        <div class="p-2 rounded-xl border flex flex-col items-center text-center justify-between min-h-[50px] shadow-3xs ${boxClass}">
+                        <div title="${escapeHtml(monthInfo.detailText || '')}" class="p-2 rounded-xl border flex flex-col items-center text-center justify-between min-h-[50px] shadow-3xs ${boxClass}">
                             <span class="text-[9px] font-bold block">${monthDisplay}</span>
                             <span class="inline-flex items-center gap-1 mt-1 text-[8px] font-extrabold uppercase">
                                 <span class="w-1.5 h-1.5 rounded-full ${dotColor}"></span>
@@ -4519,6 +4529,7 @@
 
                     const item = document.createElement('div');
                     item.className = `p-1.5 rounded-lg border flex flex-col items-center text-center justify-between min-h-[40px] shadow-3xs ${boxClass}`;
+                    item.title = monthInfo.detailText || '';
                     item.innerHTML = `
                         <span class="text-[8px] font-bold block">${monthDisplay}</span>
                         <span class="inline-flex items-center gap-0.5 mt-0.5 text-[7px] font-extrabold uppercase">
@@ -4888,6 +4899,7 @@
 
                 const item = document.createElement('div');
                 item.className = `p-2 rounded-xl border flex flex-col items-center text-center justify-between min-h-[50px] shadow-3xs ${boxClass}`;
+                item.title = monthInfo.detailText || '';
                 item.innerHTML = `
                     <span class="text-[9px] font-bold block">${monthDisplay}</span>
                     <span class="inline-flex items-center gap-1 mt-1 text-[8px] font-extrabold uppercase">
@@ -6923,14 +6935,40 @@
             });
         }
 
+        function getStudentPaidMonthCoverage(student, firstDayStr, lastDayStr, payments) {
+            const meta = student.academic_meta || getStudentAcademicMeta(student.notes);
+            const statuses = [...(meta.status_changes || [])].filter(e => e.effective_date).sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+            const fees = [...(meta.tuition_changes || [])].filter(e => e.effective_date).sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+            const registration = ensureYYYYMMDD(student.registration_date || student.reg_date);
+            const billingStart = ensureYYYYMMDD(student.tuition_start);
+            const baselineStatus = statuses.length ? (statuses[0].from_status || 'Đang học') : (student.status || 'Đang học');
+            const baselineRate = fees.length ? Number(fees[0].from_rate === undefined ? fees[0].to_rate : fees[0].from_rate) : getStudentTuitionRate(student);
+            let requiredDays = 0, coveredDays = 0;
+            for (let day = firstDayStr; day <= lastDayStr; day = paymentAddDays(day, 1)) {
+                if (registration && day < registration) continue;
+                if (!statuses.length && !fees.length && billingStart >= firstDayStr && billingStart <= lastDayStr && day < billingStart) continue;
+                const event = statuses.filter(e => e.effective_date <= day).pop();
+                const status = event ? (event.to_status || (event.type === 'return_to_study' ? 'Đang học' : event.type === 'graduate_leave' ? 'Nghỉ luôn' : 'Tạm nghỉ')) : baselineStatus;
+                const fee = fees.filter(e => e.effective_date <= day).pop();
+                const rate = fee ? Number(fee.to_rate) : baselineRate;
+                if (status !== 'Đang học' || rate === 0) continue;
+                requiredDays++;
+                if (payments.some(p => ensureYYYYMMDD(p.period_start || p.start) <= day && ensureYYYYMMDD(p.period_end || p.end) >= day)) coveredDays++;
+            }
+            return { requiredDays, coveredDays };
+        }
+
         function getStudentTuitionTimelineMonthInfo(student, firstDayStr, lastDayStr, todayStr) {
             const today = ensureYYYYMMDD(todayStr || new Date());
             const monthPayments = getStudentPaymentsForTimelineMonth(student, firstDayStr, lastDayStr);
             if (monthPayments.length > 0) {
+                const coverage = getStudentPaidMonthCoverage(student, firstDayStr, lastDayStr, monthPayments);
+                const complete = coverage.requiredDays > 0 && coverage.coveredDays === coverage.requiredDays;
                 return {
-                    boxClass: 'bg-green-50 border-green-100 text-green-700',
-                    statusText: 'Đã đóng',
-                    dotColor: 'bg-green-500'
+                    boxClass: complete ? 'bg-green-50 border-green-100 text-green-700' : 'bg-amber-50 border-amber-100 text-amber-700',
+                    statusText: complete ? 'Đã đóng' : coverage.requiredDays ? 'Đóng một phần' : 'Có giao dịch',
+                    dotColor: complete ? 'bg-green-500' : 'bg-amber-500',
+                    detailText: coverage.requiredDays ? `${coverage.coveredDays}/${coverage.requiredDays} ngày có phí được giao dịch bao phủ` : 'Có giao dịch cũ; tháng này không có ngày thu phí theo lịch sử hiện tại'
                 };
             }
 
