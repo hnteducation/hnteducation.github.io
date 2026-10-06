@@ -340,7 +340,7 @@
                             </div>
 
                             <div class="pt-4 border-t border-slate-100 flex gap-2">
-                                <button type="button" onclick="draftTuitionReminderMsg()" class="flex-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold py-2 rounded-xl text-xs transition flex items-center justify-center gap-1">
+                                <button type="button" id="qp-reminder-btn" onclick="draftTuitionReminderMsg()" class="flex-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold py-2 rounded-xl text-xs transition flex items-center justify-center gap-1">
                                     <i class="fa-solid fa-comment-sms"></i> Nhắc học phí
                                 </button>
                                 <button type="button" onclick="clearSelectedStudent()" class="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2 px-3 rounded-xl text-xs transition" title="Bỏ chọn">
@@ -525,7 +525,7 @@
                                         <span class="text-[9px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-bold">Tiềm năng</span>
                                     </div>
                                     <span class="text-base font-black text-slate-700 block mt-1" id="db-theory-revenue">0đ</span>
-                                    <span class="text-[9px] text-slate-400 mt-0.5 block leading-relaxed">(Tổng học phí của tất cả học sinh đang học nhân với số tháng của kỳ lọc)</span>
+                                    <span class="text-[9px] text-slate-400 mt-0.5 block leading-relaxed">(Ước tính theo mức phí hiện tại và tháng từ ngày bắt đầu tính phí; không chia phí theo ngày)</span>
                                 </div>
 
                                 <div class="bg-slate-50 p-4 rounded-xl border border-slate-200/20">
@@ -661,6 +661,7 @@
                                         <option value="">Tất cả trạng thái học phí</option>
                                         <option value="paid">🟢 Đã đóng học phí</option>
                                         <option value="warning">🟡 Sắp đến hạn đóng</option>
+                                        <option value="exempt">Miễn học phí</option>
                                         <option value="due">🔴 Quá hạn đóng phí</option>
                                     </select>
                                 </div>
@@ -994,8 +995,8 @@
                 <!-- Mức học phí mặc định và Ngày nhập học -->
                 <div class="grid grid-cols-2 gap-3">
                     <div>
-                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Mức Học Phí mặc định/tháng <span class="text-red-500">*</span></label>
-                        <input type="number" id="sm-tuition-rate" required placeholder="500000"
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Mức Học Phí/tháng (0đ = miễn phí) <span class="text-red-500">*</span></label>
+                        <input type="number" id="sm-tuition-rate" title="Nhập 0 để miễn học phí" min="0" step="1" oninput="updateTuitionChangeFields()" required placeholder="500000"
                                class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium">
                     </div>
                     <div>
@@ -1110,6 +1111,11 @@
                     </div>
                 </div>
 
+                <div id="sm-tuition-fields" class="hidden bg-sky-50 rounded-xl p-3 text-xs">
+                    <label for="sm-tuition-date" class="font-bold">Ngày áp dụng mức học phí mới</label>
+                    <input type="date" id="sm-tuition-date" class="border rounded px-2 py-1 ml-2">
+                    <p class="mt-2">0đ = miễn học phí, không nhắc phí. Đổi từ 0đ sang có phí sẽ bắt đầu kỳ thu từ ngày đã chọn, giữ nguyên ngày nhập học và giao dịch cũ.</p>
+                </div>
                 <div id="sm-transition-fields" class="hidden bg-amber-50 rounded-xl p-3 text-xs">
                     <label for="sm-status-date" class="font-bold">Ngày bắt đầu nghỉ / học lại</label>
                     <input type="date" id="sm-status-date" class="border rounded px-2 py-1 ml-2">
@@ -2078,10 +2084,10 @@
             const signature = JSON.stringify({ url, account, action, payload });
             if (apiFlights.has(signature)) return apiFlights.get(signature);
             const operation = (async () => {
-                if (mutation && state.apiProtocolVersion !== 3) {
+                if (mutation && state.apiProtocolVersion !== 4) {
                     const capability = await safeFetch('login');
-                    if (!capability.success || capability.protocolVersion !== 3) throw new Error('Cần cập nhật triển khai Google Apps Script trước khi lưu. Mở hướng dẫn cập nhật trong kho GitHub.');
-                    state.apiProtocolVersion = 3;
+                    if (!capability.success || capability.protocolVersion !== 4) throw new Error('Cần cập nhật triển khai Google Apps Script trước khi lưu. Mở hướng dẫn cập nhật trong kho GitHub.');
+                    state.apiProtocolVersion = 4;
                 }
                 const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signature));
                 const key = 'hnt_request_' + Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
@@ -2125,6 +2131,35 @@
 
         function getStudentBillingStart(student) {
             return student.tuition_start || student.registration_date || student.reg_date || '';
+        }
+
+        function getStudentTuitionRate(student) {
+            const value = student && student.tuition_rate;
+            if (value === undefined || value === null || String(value).trim() === '') return DEFAULT_TUITION_RATE;
+            const rate = Number(value);
+            return Number.isFinite(rate) && rate >= 0 ? rate : DEFAULT_TUITION_RATE;
+        }
+
+        function isTuitionExempt(student) {
+            return getStudentTuitionRate(student) === 0;
+        }
+
+        function getStudentTuitionInfo(student, todayStr) {
+            if (isTuitionExempt(student)) {
+                return { status: 'exempt', displayText: 'Miễn học phí', shortText: 'Miễn học phí', rangeText: 'Miễn học phí', badgeText: 'Miễn học phí', colorClass: 'text-sky-600', badgeClass: 'bg-sky-50 text-sky-700 border-sky-200', overdueDays: 0, dueStart: '', dueEnd: '' };
+            }
+            return getTuitionCycleInfo(student.paid_until, getStudentBillingStart(student), todayStr);
+        }
+
+        function getStudentExpectedTuition(student, startStr, endStr) {
+            if (isTuitionExempt(student)) return 0;
+            const anchor = ensureYYYYMMDD(getStudentBillingStart(student));
+            const start = anchor && anchor > startStr ? anchor : startStr;
+            if (start > endStr) return 0;
+            const from = new Date(start);
+            const to = new Date(endStr);
+            const months = (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth() + 1;
+            return getStudentTuitionRate(student) * Math.max(0, months);
         }
 
         window.addEventListener('online', () => fetchDataFromServer());
@@ -2918,7 +2953,11 @@
             document.getElementById('qp-student-search').value = student.name;
 
             // Điền số tiền mặc định
-            const rate = student.tuition_rate ? parseInt(student.tuition_rate) : DEFAULT_TUITION_RATE;
+            const rate = getStudentTuitionRate(student);
+            const reminderButton = document.getElementById('qp-reminder-btn');
+            reminderButton.disabled = isTuitionExempt(student) || student.status !== 'Đang học';
+            reminderButton.classList.toggle('opacity-50', reminderButton.disabled);
+            reminderButton.title = isTuitionExempt(student) ? 'Học sinh được miễn học phí' : 'Nhắc học phí';
             setQuickAmount(rate);
 
             // Cập nhật Avatar trên Panel tóm tắt
@@ -2937,8 +2976,8 @@
             document.getElementById('qp-sum-rate').textContent = rate.toLocaleString('vi-VN') + 'đ';
 
             // Tự động gợi ý ngày bắt đầu: paid_until + 1 ngày (hoặc ngày nhập học)
-            const tuitionInfo = getTuitionCycleInfo(student.paid_until, getStudentBillingStart(student));
-            const startPeriod = new Date(tuitionInfo.dueStart);
+            const tuitionInfo = getStudentTuitionInfo(student);
+            const startPeriod = new Date(tuitionInfo.dueStart || ensureYYYYMMDD(new Date()));
             document.getElementById('qp-sum-paid-until').textContent = tuitionInfo.displayText;
             document.getElementById('qp-sum-paid-until').className = `font-bold mt-0.5 ${tuitionInfo.colorClass}`;
 
@@ -3015,7 +3054,7 @@
             const primaryId = state.selectedStudent ? state.selectedStudent.id.toString() : '';
             const excludedIds = [primaryId, ...state.groupPaymentStudents.map(s => s.id.toString())];
 
-            const candidates = state.students.filter(s => s.status === 'Đang học' && !excludedIds.includes(s.id.toString()));
+            const candidates = state.students.filter(s => s.status === 'Đang học' && !isTuitionExempt(s) && !excludedIds.includes(s.id.toString()));
 
             if (candidates.length === 0) {
                 dropdown.innerHTML = '<div class="p-2 text-slate-450 italic text-[11px] text-center">Không có học sinh khả dụng</div>';
@@ -3092,13 +3131,17 @@
         function draftTuitionReminderMsg() {
             const student = state.selectedStudent;
             if (!student) return;
+            if (isTuitionExempt(student) || student.status !== 'Đang học') {
+                showToast('info', 'Không nhắc học phí', isTuitionExempt(student) ? 'Học sinh đang được miễn học phí.' : 'Học sinh đang nghỉ học.');
+                return;
+            }
 
             const nextStart = document.getElementById('qp-period-start').value;
             const nextEnd = document.getElementById('qp-period-end').value;
             const amount = parseInt(document.getElementById('qp-amount').value);
 
             let message = '';
-            const tuitionInfo = getTuitionCycleInfo(student.paid_until, getStudentBillingStart(student));
+            const tuitionInfo = getStudentTuitionInfo(student);
             if (tuitionInfo.status === 'due') {
                 message = `HNT Education thông báo: Chào Anh/Chị phụ huynh bé ${student.name}, học phí kỳ ${tuitionInfo.rangeText} hiện đã quá hạn ${tuitionInfo.overdueDays} ngày. Nhờ Anh/Chị đóng học phí kỳ này với số tiền là ${amount.toLocaleString('vi-VN')}đ. Trân trọng cảm ơn Anh/Chị!`;
             } else if (tuitionInfo.status === 'warning') {
@@ -3145,6 +3188,11 @@
                 return;
             }
 
+            const payingStudents = [state.students.find(s => String(s.id) === String(studentId)), ...state.groupPaymentStudents];
+            if (payingStudents.some(s => s && isTuitionExempt(s))) {
+                showToast('warning', 'Có học sinh miễn học phí', 'Đổi mức phí và ngày áp dụng trước khi thu; bỏ học sinh miễn phí khỏi nhóm.');
+                return;
+            }
             const primaryName = studentName;
             const amountTotal = amount;
             const count = 1 + state.groupPaymentStudents.length;
@@ -3360,7 +3408,7 @@
 
             const actualRevenue = periodPayments.reduce((sum, p) => sum + parseInt(p.amount || 0), 0);
             const dueCount = activeStudents.filter(s => {
-                return getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr).status === 'due';
+                return getStudentTuitionInfo(s, todayStr).status === 'due';
             }).length;
 
             const statsContainer = document.getElementById('stats-summary-cards');
@@ -3412,10 +3460,7 @@
             // 5. Tính toán Doanh thu Lý thuyết vs Thực tế
             let theoryRevenue = 0;
             activeStudents.forEach(s => {
-                const regDate = s.registration_date ? ensureYYYYMMDD(s.registration_date) : '';
-                if (!regDate || regDate <= endStr) {
-                    theoryRevenue += parseInt(s.tuition_rate || DEFAULT_TUITION_RATE) * monthsDiff;
-                }
+                theoryRevenue += getStudentExpectedTuition(s, startStr, endStr);
             });
 
             const diffRevenue = theoryRevenue - actualRevenue;
@@ -3616,7 +3661,7 @@
             // 1. Tính lý thuyết (Expected) cho toàn bộ học sinh đang học
             const activeStudents = state.students.filter(s => s.status === 'Đang học');
             activeStudents.forEach(s => {
-                const rate = parseInt(s.tuition_rate || DEFAULT_TUITION_RATE);
+                const rate = getStudentTuitionRate(s);
                 if (s.campuses_sessions) {
                     try {
                         const sessionStr = s.campuses_sessions.toString().trim();
@@ -3980,6 +4025,7 @@
                         paid_until: result.student.paid_until,
                         reg_date: result.student.registration_date,
                         tuition_start: result.student.tuition_start,
+                        tuition_rate: result.student.tuition_rate,
                         academic_meta: result.student.academic_meta,
                         payments: result.payments.map(p => ({
                             date: p.payment_date,
@@ -3994,7 +4040,7 @@
 
                 // Xác định trạng thái học phí
                 const todayStr = ensureYYYYMMDD(new Date());
-                const tuitionInfo = getTuitionCycleInfo(decodedData.paid_until, getStudentBillingStart(decodedData), todayStr);
+                const tuitionInfo = getStudentTuitionInfo(decodedData, todayStr);
                 let tuitionBadge = `<span class="${tuitionInfo.badgeClass} border px-2.5 py-0.5 rounded-full font-bold text-[10px]">${tuitionInfo.badgeText}</span>`;
                 let tuitionColor = tuitionInfo.colorClass;
                 let tuitionDisplayText = tuitionInfo.displayText;
@@ -4229,7 +4275,8 @@
             const history = getStudentAcademicMeta(student.notes).status_changes;
             document.getElementById('det-study-history').textContent =
                 'Bắt đầu tính phí hiện tại: ' + (getStudentBillingStart(student) ? formatDateToVN(getStudentBillingStart(student)) : '--') +
-                (history.length ? '\n' + history.map(item => formatDateToVN(item.effective_date) + ': ' + (item.to_status || (item.type === 'return_to_study' ? 'Học lại' : item.type === 'pause' ? 'Tạm nghỉ' : 'Đã nghỉ'))).join('\n') : '\nChưa có lần nghỉ / học lại được ghi nhận.');
+                (history.length ? '\n' + history.map(item => formatDateToVN(item.effective_date) + ': ' + (item.to_status || (item.type === 'return_to_study' ? 'Học lại' : item.type === 'pause' ? 'Tạm nghỉ' : 'Đã nghỉ'))).join('\n') : '\nChưa có lần nghỉ / học lại được ghi nhận.') +
+                getStudentAcademicMeta(student.notes).tuition_changes.map(item => '\n' + formatDateToVN(item.effective_date) + ': Mức phí ' + Number(item.to_rate).toLocaleString('vi-VN') + 'đ').join('');
             const detSchoolYear = document.getElementById('det-school-year');
             if (detSchoolYear) detSchoolYear.textContent = getCurrentSchoolYear();
             const detStudyStart = document.getElementById('det-study-start');
@@ -4238,11 +4285,11 @@
             if (detStudyDuration) detStudyDuration.textContent = getStudyDurationText(student.study_start || '', student.study_start_precision || '');
 
             // Tuition rate & paid until & birthdate
-            document.getElementById('det-tuition-rate').textContent = parseInt(student.tuition_rate || DEFAULT_TUITION_RATE).toLocaleString('vi-VN') + 'đ';
+            document.getElementById('det-tuition-rate').textContent = getStudentTuitionRate(student).toLocaleString('vi-VN') + 'đ';
 
             
             const paidUntilEl = document.getElementById('det-paid-until');
-            const detailTuitionInfo = getTuitionCycleInfo(student.paid_until, getStudentBillingStart(student));
+            const detailTuitionInfo = getStudentTuitionInfo(student);
             if (student.status && student.status !== 'Đang học') {
                 paidUntilEl.textContent = student.status === 'Tạm nghỉ' ? 'Đang tạm nghỉ, chưa tạo kỳ thu mới' : 'Đã nghỉ học';
                 paidUntilEl.className = 'font-black text-slate-500';
@@ -4492,6 +4539,7 @@
                     paid_until: student.paid_until,
                     reg_date: student.registration_date,
                     tuition_start: student.tuition_start,
+                    tuition_rate: student.tuition_rate,
                     academic_meta: getStudentAcademicMeta(student.notes),
                     payments: state.payments.filter(p => p.student_id.toString() === student.id.toString()).map(p => ({
                         date: p.payment_date,
@@ -4628,7 +4676,7 @@
                 <span class="mx-1.5 text-slate-300">|</span>
                 <span><i class="fa-solid fa-school text-slate-400 mr-1"></i> Trường: ${student.school || 'Tự do'}</span>
             `;
-            const tuitionInfo = getTuitionCycleInfo(student.paid_until, getStudentBillingStart(student));
+            const tuitionInfo = getStudentTuitionInfo(student);
             document.getElementById('db-student-paid-until').textContent = tuitionInfo.displayText;
             document.getElementById('db-student-paid-until').className = "text-xs font-black block mt-0.5 " + tuitionInfo.colorClass;
 
@@ -4790,7 +4838,7 @@
             if (tuitionStatusVal) {
                 filtered = filtered.filter(s => {
                     if (s.status !== 'Đang học') return false;
-                    const status = getTuitionStatus(s.paid_until, getStudentBillingStart(s), todayStr);
+                    const status = getStudentTuitionInfo(s, todayStr).status;
                     return status === tuitionStatusVal;
                 });
             }
@@ -4892,11 +4940,13 @@
                 if (s.status !== 'Đang học') {
                     tuitionBadge = '<span class="text-slate-400 italic">--</span>';
                 } else {
-                    const tuitionInfo = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr);
+                    const tuitionInfo = getStudentTuitionInfo(s, todayStr);
                     const status = tuitionInfo.status;
                     const colorClass = tuitionInfo.colorClass;
 
-                    if (status === 'paid') {
+                    if (status === 'exempt') {
+                        tuitionBadge = '<span class="text-sky-600 font-bold">Miễn học phí</span>';
+                    } else if (status === 'paid') {
                         tuitionBadge = `
                             <div class="text-center">
                                 <span class="font-bold text-center block ${colorClass}">${tuitionInfo.displayText}</span>
@@ -4980,8 +5030,10 @@
                     if (s.status !== 'Đang học') {
                         cardTuitionBadge = `<span class="bg-slate-50 text-slate-400 border border-slate-150 px-2 py-0.5 rounded-full text-[9px] font-bold">Không học</span>`;
                     } else {
-                        const tuitionInfo = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr);
-                        if (tuitionInfo.status === 'paid') {
+                        const tuitionInfo = getStudentTuitionInfo(s, todayStr);
+                        if (tuitionInfo.status === 'exempt') {
+                            cardTuitionBadge = '<span class="text-sky-600 text-xs font-bold">Miễn học phí</span>';
+                        } else if (tuitionInfo.status === 'paid') {
                             cardTuitionBadge = `<span class="bg-green-50 text-green-700 border border-green-150 px-2 py-0.5 rounded-full text-[9px] font-bold">Đã đóng phí</span>`;
                         } else if (tuitionInfo.status === 'warning') {
                             cardTuitionBadge = `<span class="bg-amber-50 text-amber-700 border border-amber-150 px-2 py-0.5 rounded-full text-[9px] font-bold">Đến kỳ đóng</span>`;
@@ -5007,8 +5059,8 @@
                             </div>
                         </div>
                         <div class="bg-slate-50 p-2.5 rounded-xl text-[10px] text-slate-600 grid grid-cols-2 gap-2">
-                            <div><span class="text-slate-400 font-bold block">Kỳ cần đóng:</span> <span class="font-semibold text-slate-700">${getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr).displayText}</span></div>
-                            <div><span class="text-slate-400 font-bold block">Học phí lý thuyết:</span> <span class="font-semibold text-slate-700">${parseInt(s.tuition_rate || DEFAULT_TUITION_RATE).toLocaleString('vi-VN')}đ</span></div>
+                            <div><span class="text-slate-400 font-bold block">Kỳ cần đóng:</span> <span class="font-semibold text-slate-700">${getStudentTuitionInfo(s, todayStr).displayText}</span></div>
+                            <div><span class="text-slate-400 font-bold block">Học phí lý thuyết:</span> <span class="font-semibold text-slate-700">${getStudentTuitionRate(s).toLocaleString('vi-VN')}đ</span></div>
                         </div>
                         <div class="flex justify-end gap-1.5 pt-1.5 border-t border-slate-100 text-[10px] font-bold">
                             <button onclick="selectStudentForQuickPayment('${s.id}'); switchTab('quick-input')" class="bg-orange-50 hover:bg-orange-100 text-accent py-1.5 px-3 rounded-lg transition flex items-center gap-1">
@@ -5153,8 +5205,8 @@
 
                 let tuitionStatusText = 'Chưa đóng phí';
                 let tuitionStatusClass = 'bg-red-50 text-red-700 border-red-100';
-                const attendanceTuitionInfo = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s));
-                if (attendanceTuitionInfo.status === 'paid') {
+                const attendanceTuitionInfo = getStudentTuitionInfo(s);
+                if (attendanceTuitionInfo.status === 'paid' || attendanceTuitionInfo.status === 'exempt') {
                     tuitionStatusText = attendanceTuitionInfo.displayText;
                     tuitionStatusClass = 'bg-green-50 text-green-700 border-green-200';
                 } else if (attendanceTuitionInfo.status === 'warning') {
@@ -5653,11 +5705,11 @@
             const todayStr = ensureYYYYMMDD(today);
 
             classStudents.forEach(s => {
-                const rate = parseInt(s.tuition_rate || DEFAULT_TUITION_RATE);
+                const rate = getStudentTuitionRate(s);
                 expectedSum += rate;
 
                 const hasPaidThisMonth = classPayments.some(p => p.student_id && s.id && p.student_id.toString() === s.id.toString());
-                const isOverdue = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr).status === 'due';
+                const isOverdue = getStudentTuitionInfo(s, todayStr).status === 'due';
 
                 if (!hasPaidThisMonth && isOverdue) {
                     missingSum += rate;
@@ -5765,6 +5817,14 @@
         }
 
         // THÊM / SỬA HỌC SINH MODAL OPEN
+        function updateTuitionChangeFields() {
+            const id = document.getElementById('sm-student-id').dataset.originalId;
+            const student = state.students.find(s => String(s.id) === String(id));
+            const changed = document.getElementById('student-form').dataset.mode === 'edit' && student && Number(document.getElementById('sm-tuition-rate').value) !== getStudentTuitionRate(student);
+            document.getElementById('sm-tuition-fields').classList.toggle('hidden', !changed);
+            document.getElementById('sm-tuition-date').required = !!changed;
+        }
+
         function updateStudyTransitionFields() {
             const originalId = document.getElementById('sm-student-id').dataset.originalId;
             const student = state.students.find(s => String(s.id) === String(originalId));
@@ -5784,6 +5844,9 @@
             document.getElementById('sm-student-id').placeholder = 'Sẽ tự động sinh...';
             document.getElementById('sm-student-id').dataset.originalId = '';
             document.getElementById('sm-avatar-url').value = '';
+            document.getElementById('sm-tuition-date').value = ensureYYYYMMDD(new Date());
+            document.getElementById('sm-tuition-date').max = ensureYYYYMMDD(new Date());
+            updateTuitionChangeFields();
             document.getElementById('sm-status-date').value = ensureYYYYMMDD(new Date());
             document.getElementById('sm-status-date').max = ensureYYYYMMDD(new Date());
             updateStudyTransitionFields();
@@ -5841,11 +5904,15 @@
             document.getElementById('sm-grade').value = student.grade;
             document.getElementById('sm-school').value = student.school || '';
             document.getElementById('sm-class-school').value = student.class_school || '';
-            document.getElementById('sm-tuition-rate').value = student.tuition_rate || DEFAULT_TUITION_RATE;
+            document.getElementById('sm-tuition-rate').value = getStudentTuitionRate(student);
+            updateTuitionChangeFields();
             setInputValue('sm-registration-date', ensureYYYYMMDD(student.registration_date));
             document.getElementById('sm-study-start').value = student.study_start || '';
             document.getElementById('sm-study-start-precision').value = student.study_start_precision || inferStudyStartPrecision(student.study_start || '');
             document.getElementById('sm-status').value = student.status || 'Đang học';
+            document.getElementById('sm-tuition-date').value = ensureYYYYMMDD(new Date());
+            document.getElementById('sm-tuition-date').max = ensureYYYYMMDD(new Date());
+            updateTuitionChangeFields();
             document.getElementById('sm-status-date').value = ensureYYYYMMDD(new Date());
             document.getElementById('sm-status-date').max = ensureYYYYMMDD(new Date());
             updateStudyTransitionFields();
@@ -6086,7 +6153,8 @@
                 grade: document.getElementById('sm-grade').value,
                 school: document.getElementById('sm-school').value.trim(),
                 class_school: document.getElementById('sm-class-school').value.trim(),
-                tuition_rate: parseInt(document.getElementById('sm-tuition-rate').value),
+                tuition_rate: Number(document.getElementById('sm-tuition-rate').value),
+                tuition_effective_date: document.getElementById('sm-tuition-date').value,
                 registration_date: document.getElementById('sm-registration-date').value,
                 study_start: document.getElementById('sm-study-start').value.trim(),
                 study_start_precision: document.getElementById('sm-study-start-precision').value,
@@ -6730,6 +6798,14 @@
                 };
             }
 
+            const feeEvents = [...(meta.tuition_changes || [])].sort((a, b) => (a.effective_date || '').localeCompare(b.effective_date || ''));
+            const feeAtStart = feeEvents.filter(item => item.effective_date <= firstDayStr).pop();
+            const feeStartedInMonth = feeEvents.find(item => Number(item.to_rate) === 0 && item.effective_date >= firstDayStr && item.effective_date <= lastDayStr && item.type === 'initial_rate');
+            const paidRateInMonth = feeEvents.some(item => Number(item.to_rate) > 0 && item.effective_date >= firstDayStr && item.effective_date <= lastDayStr);
+            if ((((feeAtStart && Number(feeAtStart.to_rate) === 0) || feeStartedInMonth) && !paidRateInMonth) || (!feeEvents.length && isTuitionExempt(student))) {
+                return { boxClass: 'bg-sky-50 border-sky-100 text-sky-700', statusText: 'Miễn học phí', dotColor: 'bg-sky-500' };
+            }
+
             if (firstDayStr > today) {
                 return {
                     boxClass: 'bg-slate-50 border-slate-200/50 text-slate-400',
@@ -6891,16 +6967,17 @@
         }
 
         function getStudentAcademicMeta(notes) {
-            if (!notes || !notes.includes('===ACADEMIC===')) return { promotions: [], status_changes: [] };
+            if (!notes || !notes.includes('===ACADEMIC===')) return { promotions: [], status_changes: [], tuition_changes: [] };
             try {
                 const jsonStr = notes.split('===ACADEMIC===')[1].split('===ALBUM===')[0].split('===JOURNAL===')[0].trim();
                 const parsed = JSON.parse(jsonStr) || {};
                 return {
                     promotions: Array.isArray(parsed.promotions) ? parsed.promotions : [],
-                    status_changes: Array.isArray(parsed.status_changes) ? parsed.status_changes : []
+                    status_changes: Array.isArray(parsed.status_changes) ? parsed.status_changes : [],
+                    tuition_changes: Array.isArray(parsed.tuition_changes) ? parsed.tuition_changes : []
                 };
             } catch(e) {
-                return { promotions: [], status_changes: [] };
+                return { promotions: [], status_changes: [], tuition_changes: [] };
             }
         }
 
@@ -6985,10 +7062,11 @@
             const normalizedJournal = (journal || []).map((entry, index) => normalizeJournalEntry(entry, index)).filter(Boolean);
             const parts = [];
             if (cleanNote) parts.push(cleanNote);
-            if (academicMeta && ((academicMeta.promotions || []).length || (academicMeta.status_changes || []).length)) {
+            if (academicMeta && ((academicMeta.promotions || []).length || (academicMeta.status_changes || []).length || (academicMeta.tuition_changes || []).length)) {
                 parts.push(`===ACADEMIC=== ${JSON.stringify({
                     promotions: academicMeta.promotions || [],
-                    status_changes: academicMeta.status_changes || []
+                    status_changes: academicMeta.status_changes || [],
+                    tuition_changes: academicMeta.tuition_changes || []
                 })}`);
             }
             if (normalizedAlbum.length > 0) {
@@ -7778,6 +7856,10 @@
                 grade: s.grade || '',
                 school: s.school || '',
                 status: 'Đang học',
+                tuition_rate: s.tuition_rate,
+                tuition_start: s.tuition_start,
+                registration_date: s.registration_date,
+                paid_until: s.paid_until,
                 campuses_sessions: s.campuses_sessions || '',
                 lastPayment: s.lastPayment || s.last_payment || getLatestPublicPaymentFromList(s.id, payments)
             }));
@@ -8313,7 +8395,7 @@ publicView.innerHTML = `
                 const payments = state.payments.filter(p => p.student_id && s.id && p.student_id.toString() === s.id.toString())
                                               .sort((a, b) => (b.payment_date || '').localeCompare(a.payment_date || ''));
                 s.lastPayment = payments.length > 0 ? payments[0] : null;
-                s.tuition_status = getTuitionStatus(s.paid_until, getStudentBillingStart(s), todayStr);
+                s.tuition_status = getStudentTuitionInfo(s, todayStr).status;
             });
 
             // Gom nhóm học sinh theo Khối + Trường
@@ -8408,7 +8490,7 @@ publicView.innerHTML = `
                     }).join('') + `</div>`;
                 } else {
                     tagsHtml = `<div class="flex flex-col gap-1.5 py-1">` + group.students.map(s => {
-                        const tuitionInfo = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr);
+                        const tuitionInfo = getStudentTuitionInfo(s, todayStr);
                         const tuitionStatus = tuitionInfo.status;
                         let dot = '🔴';
                         let tagColorClass = 'text-red-500';
@@ -8416,7 +8498,11 @@ publicView.innerHTML = `
 
                         let lastPaymentStr = 'Chưa đóng lần nào';
 
-                        if (tuitionStatus === 'paid') {
+                        if (tuitionStatus === 'exempt') {
+                            dot = '🔵';
+                            tagColorClass = 'text-sky-600';
+                            statusLabel = 'Miễn học phí';
+                        } else if (tuitionStatus === 'paid') {
                             dot = '🟢';
                             tagColorClass = 'text-green-600';
                             statusLabel = 'Đã đóng';

@@ -12,6 +12,11 @@ Tài liệu Google về cập nhật deployment: https://developers.google.com/a
 
 ## Khi dùng hằng ngày
 
+- Mức phí `0` hoặc `0đ` trong form nghĩa là miễn học phí. Học sinh vẫn thuộc số đang học, nhưng không tạo nhắc phí, báo trễ hạn hay doanh thu học phí dự kiến. Giao dịch cũ vẫn được giữ.
+- Đổi mức phí trong Sửa thông tin học sinh và chọn ngày áp dụng. Khi đổi từ 0đ sang số dương, kỳ thu bắt đầu từ ngày đó (hoặc ngày học lại nếu học lại muộn hơn), không tính truy thu thời gian miễn phí. Ngày nhập học không bị sửa. Không hỗ trợ lên lịch đổi phí cho ngày tương lai.
+- Lịch sử có dấu vết từng lần đổi mức phí; các tháng miễn phí được hiển thị riêng kể cả sau khi bắt đầu thu phí. Tháng đổi mức phí giữa tháng có thể có cả thời gian miễn và có phí; hệ thống không tự chia tiền theo ngày.
+- Doanh thu lý thuyết là ước tính dùng mức phí hiện tại và các tháng từ ngày bắt đầu tính phí hiện tại, không phải sổ công nợ lịch sử. Báo cáo doanh thu thực thu vẫn dùng các giao dịch thực tế.
+
 - Thanh kết nối hiển thị riêng số đang học, tạm nghỉ và tổng hồ sơ. Hồ sơ nghỉ được giữ để tra cứu; số đang học chỉ tính trạng thái Đang học.
 - Đổi trạng thái trong Sửa thông tin học sinh. Không cần sửa ngày nhập học khi quay lại. Trạng thái áp dụng ngay nên ngày hiệu lực phải là hôm nay hoặc trước đó. Không tự động hẹn ngày học lại.
 - Cột `tuition_start` được tự thêm cuối Sheet HocSinh; dữ liệu cũ dùng ngày nhập học khi cột này trống. Khoản phí cũ vẫn giữ nguyên. Đây là bắt đầu kỳ thu mới, không tự tính hoàn tiền hoặc chia phí theo số ngày nghỉ.
@@ -22,10 +27,14 @@ Tài liệu Google về cập nhật deployment: https://developers.google.com/a
 
 ## Cập nhật GitHub những lần sau
 
-Chạy `node tools/check-management.cjs`, xem diff trong GitHub Desktop rồi commit các file đã sửa. Push sẽ chạy workflow kiểm tra. Giữ cấu hình GitHub Pages đang dùng; workflow này chỉ kiểm tra, không thay nguồn triển khai của toàn bộ website.
+Chạy `node tools/check-management.cjs --web-only`, xem diff trong GitHub Desktop rồi commit các file web đã sửa. Push sẽ chạy workflow kiểm tra phần web, không cần file Apps Script. Giữ cấu hình GitHub Pages đang dùng; workflow này chỉ kiểm tra, không thay nguồn triển khai của toàn bộ website.
 
-Backend được quản lý cùng mã web. File `.gitignore` bỏ qua `.env`, `.clasp.json`, workbook và bản backup; kiểm tra không đưa dữ liệu học sinh hoặc mật mã vào commit. File `.gitattributes` thống nhất xuống dòng để diff dễ đọc.
+Backend `google_apps_script.js` giữ riêng trên máy và triển khai riêng lên Google, không đồng bộ lên GitHub. File `.gitignore` bỏ qua backend, `.env`, `.clasp.json`, workbook và bản backup. File `.gitattributes` thống nhất xuống dòng để diff dễ đọc. Nếu backend từng được Git theo dõi, thao tác bỏ theo dõi sẽ xuất hiện là xóa file trong commit tiếp theo; file trên máy vẫn giữ nguyên.
 
 Mỗi khi sửa backend, phải cập nhật deployment Apps Script riêng. Push GitHub chỉ cập nhật phần website, không cập nhật code đang chạy trên Google.
 
 Kiểm tra tự động mô phỏng Sheet, mất phản hồi và học lại; cần thử trên deployment Google thật sau khi cài. Chưa có kiểm thử mạng di động hoặc quota Apps Script thực tế trong bộ kiểm tra này.
+
+Bản miễn học phí yêu cầu backend giao thức 4. Cập nhật cả Apps Script và website rồi tải lại trang.
+
+Để kiểm tra đầy đủ cả backend cục bộ và web trên máy, chạy `node tools/check-management.cjs`. Kiểm tra này mô phỏng Apps Script; không triển khai mã hoặc ghi vào Google Sheet thật. Backend cục bộ không bị kiểm tra mật mã bởi GitHub CI vì không nằm trong repo.

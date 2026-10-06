@@ -3,6 +3,11 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 
+if (process.argv.includes('--web-only')) {
+  require('./check-web.cjs');
+  return;
+}
+
 const backend = fs.readFileSync('google_apps_script.js', 'utf8');
 const html = fs.readFileSync('quanly.html', 'utf8');
 new vm.Script(backend);
@@ -10,7 +15,6 @@ const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)]
   .filter(match => !/\bsrc\s*=/.test(match[1]) && !/application\/ld\+json/.test(match[1]));
 scripts.forEach((match, i) => new vm.Script(match[2], { filename: `quanly-inline-${i}.js` }));
 assert(!/^(?:<<<<<<<|=======|>>>>>>>)/m.test(fs.readFileSync('.gitignore', 'utf8')));
-assert.match(backend, /var PASSCODE = "";/);
 
 class Sheet {
   constructor() { this.rows = []; }
@@ -87,6 +91,27 @@ locked = true;
 assert.equal(request(add).retryable, true);
 locked = false;
 
+const freeResult = request({ action: 'addStudent', requestId: 'free-student', studentData: { ...input, name: 'Học sinh miễn phí', tuition_rate: 0 } });
+assert.equal(freeResult.success, true);
+const freeId = freeResult.student.id;
+let freeStudent = context.getSheetRowsAsObjects(sheets.get('HocSinh'), context.STUDENT_HEADERS).find(s => s.id === freeId);
+assert.equal(freeStudent.tuition_rate, 0, 'numeric zero preserved');
+assert.equal(request({ ...payment, requestId: 'free-payment', paymentData: { ...payment.paymentData, student_id: freeId } }).success, false, 'server blocks fees for exempt students');
+const enableFees = { action: 'updateStudent', requestId: 'enable-fees', studentId: freeId, studentData: { tuition_rate: 450000, tuition_effective_date: '2026-07-15' } };
+assert.equal(request(enableFees).success, true);
+request(enableFees);
+freeStudent = context.getSheetRowsAsObjects(sheets.get('HocSinh'), context.STUDENT_HEADERS).find(s => s.id === freeId);
+assert.equal(freeStudent.registration_date, input.registration_date);
+assert.equal(freeStudent.tuition_start, '2026-07-15', 'enabling fees cannot backdate to enrollment');
+assert.equal(context.parseAcademicMeta(freeStudent.notes).tuition_changes.length, 2, 'fee retry must not duplicate history');
+assert.equal(request({ action: 'updateStudent', requestId: 'bad-rate', studentId: freeId, studentData: { tuition_rate: -1, tuition_effective_date: '2026-08-01' } }).success, false);
+assert.equal(request({ action: 'updateStudent', requestId: 'same-positive', studentId: freeId, studentData: { tuition_rate: 500000, tuition_effective_date: '2026-08-01' } }).success, true);
+const chargedStudent = context.getSheetRowsAsObjects(sheets.get('HocSinh'), context.STUDENT_HEADERS).find(s => s.id === freeId);
+assert.equal(chargedStudent.tuition_start, '2026-07-15', 'positive-to-positive rate change keeps fee anchor');
+assert.equal(request({ action: 'updateStudent', requestId: 'free-again', studentId: freeId, studentData: { tuition_rate: 0, tuition_effective_date: '2026-09-01' } }).success, true);
+const exemptAgain = context.getSheetRowsAsObjects(sheets.get('HocSinh'), context.STUDENT_HEADERS).find(s => s.id === freeId);
+assert.equal(exemptAgain.status, 'Đang học', 'fee exemption must not change enrollment status');
+
 // Run actual frontend functions in an isolated browser-like context.
 function fn(name) {
   const match = html.match(new RegExp('        (?:async )?function ' + name + '\\([^]*?\\n        }'));
@@ -99,15 +124,16 @@ const browser = vm.createContext({ console, Date, crypto: crypto.webcrypto, Text
   setTimeout, clearTimeout,
   localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
   window: { addEventListener() {} }, document: { addEventListener() {} },
-  state: { config: { apiUrl: 'https://example.test/exec', sessionToken: 'master.master.123.sig' }, apiProtocolVersion: 3, payments: [] },
+  state: { config: { apiUrl: 'https://example.test/exec', sessionToken: 'master.master.123.sig' }, apiProtocolVersion: 4, payments: [] },
   fetch: async (url, options) => {
     requests.push(JSON.parse(options.body));
     if (requests.length === 1) throw new Error('response lost after server write');
-    return { ok: true, json: async () => ({ success: true, protocolVersion: 3 }) };
+    return { ok: true, json: async () => ({ success: true, protocolVersion: 4 }) };
   }
 });
+browser.DEFAULT_TUITION_RATE = 500000;
 vm.runInContext(html.slice(html.indexOf('        const apiFlights'), html.indexOf('        // KHI TRANG WEB')), browser);
-['ensureYYYYMMDD', 'formatDateToYYYYMMDD', 'formatDateToVN', 'addDays', 'addMonthsToDate', 'getTuitionCycleInfo', 'getStudentAcademicMeta', 'getStudentPaymentsForTimelineMonth', 'getStudentTuitionTimelineMonthInfo', 'normalizeStudyStart', 'inferStudyStartPrecision'].forEach(name => vm.runInContext(fn(name), browser));
+['ensureYYYYMMDD', 'formatDateToYYYYMMDD', 'formatDateToVN', 'addDays', 'addMonthsToDate', 'getDaysDifferenceFromToday', 'getTuitionCycleInfo', 'getStudentAcademicMeta', 'getStudentPaymentsForTimelineMonth', 'getStudentTuitionTimelineMonthInfo', 'normalizeStudyStart', 'inferStudyStartPrecision'].forEach(name => vm.runInContext(fn(name), browser));
 (async () => {
   const [a, b] = await Promise.all([browser.safeFetch('addPayment', { paymentData: { amount: 42 } }), browser.safeFetch('addPayment', { paymentData: { amount: 42 } })]);
   assert(a.success && b.success);
@@ -127,5 +153,23 @@ vm.runInContext(html.slice(html.indexOf('        const apiFlights'), html.indexO
   const month = browser.getStudentTuitionTimelineMonthInfo(student, '2026-03-01', '2026-03-31', '2026-06-15');
   assert.equal(month.statusText, 'Tạm nghỉ', 'paused full month must not show missing fees');
   assert.equal(browser.getStudentTuitionTimelineMonthInfo(student, '2026-01-01', '2026-01-31', '2026-06-15').statusText, 'Thiếu phí', 'resume must not erase historical unpaid month');
-  console.log('PASS: inline syntax, durable receipts, interrupted writes, enrollment history, batch resume, retry/double click, legacy compatibility, billing timeline.');
+  assert.equal(browser.getStudentTuitionRate({ tuition_rate: 0 }), 0);
+  assert.equal(browser.getStudentTuitionRate({ tuition_rate: '0' }), 0);
+  assert.equal(browser.getStudentTuitionRate({ tuition_rate: '' }), 500000);
+  assert.equal(browser.getStudentTuitionInfo(exemptAgain).status, 'exempt');
+  assert.equal(browser.getStudentTuitionInfo(chargedStudent, '2026-08-15').dueStart, '2026-07-15');
+  assert.equal(browser.getStudentExpectedTuition(exemptAgain, '2026-01-01', '2026-09-30'), 0);
+  assert.equal(browser.getStudentExpectedTuition(chargedStudent, '2026-01-01', '2026-06-30'), 0, 'no expected revenue before fees start');
+  assert.equal(browser.getStudentExpectedTuition(chargedStudent, '2026-01-01', '2026-08-31'), 1000000);
+  assert.equal(browser.getStudentTuitionTimelineMonthInfo(chargedStudent, '2026-06-01', '2026-06-30', '2026-10-06').statusText, 'Miễn học phí', 'free history survives enabling fees');
+  assert.equal(browser.getStudentTuitionTimelineMonthInfo(exemptAgain, '2026-07-01', '2026-07-31', '2026-10-06').statusText, 'Thiếu phí', 'exemption keeps earlier chargeable history');
+  assert.equal(browser.getStudentTuitionTimelineMonthInfo(exemptAgain, '2026-09-01', '2026-09-30', '2026-10-06').statusText, 'Miễn học phí');
+  browser.state.selectedStudent = exemptAgain;
+  let notice;
+  browser.showToast = (...args) => { notice = args; };
+  browser.navigator = { clipboard: { writeText() { throw new Error('must not draft reminder for exempt student'); } } };
+  vm.runInContext(fn('draftTuitionReminderMsg'), browser);
+  browser.draftTuitionReminderMsg();
+  assert.equal(notice[1], 'Không nhắc học phí');
+  console.log('PASS: syntax, receipts, retries, enrollment history, batch resume, exemptions, free-to-paid billing, fee history, revenue, reminder guard.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
