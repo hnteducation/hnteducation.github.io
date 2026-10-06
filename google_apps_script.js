@@ -19,9 +19,9 @@
 // Project Settings > Script properties:
 // HNT_MASTER_PASSCODE, HNT_MANAGER_PASSCODE, HNT_PUBLIC_SECRET.
 // Các giá trị dưới đây chỉ là fallback để thiết lập lần đầu.
-var PASSCODE = "CHANGE_ME_MASTER_PASSCODE";
+var PASSCODE = "";
 var MANAGER_PASSCODE = "";
-var PUBLIC_SECRET = "CHANGE_ME_PUBLIC_SECRET";
+var PUBLIC_SECRET = "";
 
 var SESSION_TTL_SECONDS = 12 * 60 * 60;
 var REMEMBER_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -49,7 +49,7 @@ var STUDENT_HEADERS = [
   "grade", "class_school", "campuses_sessions",
   "registration_date", "status", "tuition_rate", "paid_until",
   "notes", "father_name", "father_phone", "mother_name", "mother_phone",
-  "social_links", "avatar_url", "study_start", "study_start_precision"
+  "social_links", "avatar_url", "study_start", "study_start_precision", "tuition_start"
 ];
 
 var PAYMENT_HEADERS = [
@@ -70,6 +70,7 @@ var JOURNAL_HEADERS = [
 function getSecurityProperties() {
   var props = PropertiesService.getScriptProperties();
   var masterPass = props.getProperty("HNT_MASTER_PASSCODE") || PASSCODE;
+  if (!masterPass) throw new Error("Hãy cấu hình HNT_MASTER_PASSCODE trong Script Properties.");
   var managerPass = props.getProperty("HNT_MANAGER_PASSCODE") || MANAGER_PASSCODE;
   var publicSecret = props.getProperty("HNT_PUBLIC_SECRET") || PUBLIC_SECRET || masterPass;
   var managerPermissions = DEFAULT_MANAGER_PERMISSIONS;
@@ -331,6 +332,7 @@ function handleRequest(e, method) {
     return ContentService.createTextOutput("").setMimeType(ContentService.MimeType.TEXT);
   }
 
+  var requestLock;
   try {
     var params = {};
     if (method === "GET") {
@@ -350,8 +352,19 @@ function handleRequest(e, method) {
       }, 403);
     }
 
+    requestLock = LockService.getScriptLock();
+    if (!requestLock.tryLock(10000)) {
+      return createJSONResponse({ success: false, retryable: true, error: "Máy chủ đang bận. Vui lòng thử lại." });
+    }
     var result = {};
     initSheets();
+    var readActions = ["login", "getData", "getPublicReport", "getPublicSchedule", "getSecurityConfig", "createParentToken", "createPublicScheduleToken"];
+    var receipt = null;
+    if (readActions.indexOf(action) === -1) {
+      if (!params.requestId) return createJSONResponse({ success: false, error: "Vui lòng tải lại website để dùng phiên bản đồng bộ mới." });
+      receipt = beginRequestReceipt(params, auth);
+      if (receipt.result) return createJSONResponse(receipt.result);
+    }
 
     if (action === "login") {
       result = {
@@ -406,15 +419,78 @@ function handleRequest(e, method) {
       result = { success: false, error: "Action khong hop le: " + action };
     }
 
+    if (receipt) {
+      SpreadsheetApp.flush();
+      receipt.sheet.getRange(receipt.row, 3).setValue(JSON.stringify(result));
+      SpreadsheetApp.flush();
+    }
+    result.protocolVersion = 3;
     return createJSONResponse(result, 200);
 
   } catch (err) {
     return createJSONResponse({
       success: false,
+      uncertain: !!receipt,
       error: "Loi he thong Apps Script: " + err.toString()
     }, 500);
+  } finally {
+    if (requestLock && requestLock.hasLock()) requestLock.releaseLock();
   }
 }
+// Durable receipts survive a lost HTTP response and browser reload.
+// A pending receipt after a terminated execution requires inspection, never blind replay.
+function beginRequestReceipt(params, auth) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("YeuCauDongBo");
+  if (!sheet) {
+    sheet = ss.insertSheet("YeuCauDongBo");
+    sheet.appendRow(["request_key", "fingerprint", "result", "created_at"]);
+  }
+  var key = (auth.accountId || auth.role) + ":" + params.requestId;
+  var data = Object.assign({}, params);
+  delete data.sessionToken;
+  delete data.passcode;
+  delete data.requestId;
+  var fingerprint = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(data)));
+  var rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues() : [];
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i][0] !== key) continue;
+    if (rows[i][1] !== fingerprint) return { result: { success: false, error: "Mã yêu cầu đã được dùng cho dữ liệu khác." } };
+    if (rows[i][2]) return { result: JSON.parse(rows[i][2]) };
+    return { result: { success: false, uncertain: true, error: "Yêu cầu chưa xác nhận hoàn tất. Hãy đồng bộ và kiểm tra Sheet trước khi tạo giao dịch khác. Mã: " + params.requestId } };
+  }
+  sheet.appendRow([key, fingerprint, "", new Date().toISOString()]);
+  SpreadsheetApp.flush();
+  return { sheet: sheet, row: sheet.getLastRow() };
+}
+
+function validateEffectiveDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "") || isNaN(new Date(value).getTime()) || new Date(value).toISOString().slice(0, 10) !== value) {
+    throw new Error("Ngày thay đổi trạng thái không hợp lệ.");
+  }
+  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  if (value > today) throw new Error("Chọn ngày hôm nay hoặc ngày trước đó; chưa hỗ trợ đổi trạng thái trong tương lai.");
+  return value;
+}
+
+function recordStudyTransition(studentData, current) {
+  var nextStatus = studentData.status || current.status;
+  if (nextStatus === current.status) {
+    if (studentData.notes !== undefined) studentData.notes = buildNotesWithAcademicMeta(studentData.notes, parseAcademicMeta(current.notes));
+    return;
+  }
+  if (["Đang học", "Tạm nghỉ", "Nghỉ luôn"].indexOf(nextStatus) === -1) throw new Error("Trạng thái không hợp lệ.");
+  var date = validateEffectiveDate(studentData.status_effective_date);
+  var meta = parseAcademicMeta(current.notes);
+  var last = meta.status_changes.length ? meta.status_changes[meta.status_changes.length - 1].effective_date : "";
+  var anchor = current.tuition_start || current.registration_date;
+  if (anchor instanceof Date) anchor = formatDate(anchor);
+  if ((last && date < last) || (anchor && date < anchor)) throw new Error("Ngày thay đổi phải sau ngày bắt đầu học và lần thay đổi gần nhất.");
+  meta.status_changes.push({ type: nextStatus === "Đang học" ? "return_to_study" : (nextStatus === "Tạm nghỉ" ? "pause" : "graduate_leave"), from_status: current.status, to_status: nextStatus, effective_date: date, school_year: inferSchoolYearForDate(date), registration_date: current.registration_date instanceof Date ? formatDate(current.registration_date) : current.registration_date, created_at: new Date().toISOString() });
+  studentData.notes = buildNotesWithAcademicMeta(studentData.notes !== undefined ? studentData.notes : current.notes, meta);
+  if (nextStatus === "Đang học") studentData.tuition_start = date;
+}
+
 function createJSONResponse(data, statusCode) {
   var output = ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
@@ -630,6 +706,10 @@ function addStudent(studentData) {
   }
   var gender = studentData.gender === "Nữ" ? 1 : 0;
 
+  if (!studentData.name || !studentData.name.trim()) throw new Error("Thiếu tên học sinh.");
+  studentData.status = studentData.status || "Đang học";
+  studentData.tuition_start = studentData.registration_date || "";
+  if (studentData.status !== "Đang học") recordStudyTransition(studentData, { status: "Đang học", notes: "", registration_date: studentData.registration_date });
   // Tự sinh ID
   var nextId = generateNextStudentId(sheet, birthYear, gender);
   studentData.id = nextId;
@@ -702,6 +782,11 @@ function updateStudent(studentId, studentData) {
     return { success: false, error: "Không tìm thấy học sinh có mã cũ: " + studentId };
   }
 
+  var currentValues = sheet.getRange(rowIndex, 1, 1, STUDENT_HEADERS.length).getValues()[0];
+  var currentStudent = {};
+  STUDENT_HEADERS.forEach(function(key, index) { currentStudent[key] = currentValues[index]; });
+  recordStudyTransition(studentData, currentStudent);
+
   var newId = studentData.id ? studentData.id.toString().trim() : '';
 
   // A. Trường hợp Thay đổi mã học sinh
@@ -718,7 +803,6 @@ function updateStudent(studentId, studentData) {
   }
 
   // B. Cập nhật tất cả các cột của Học sinh (Tối ưu hóa: Đọc và ghi toàn bộ hàng trong 1 cuộc gọi)
-  var currentValues = sheet.getRange(rowIndex, 1, 1, STUDENT_HEADERS.length).getValues()[0];
   var newRowValues = [];
   for (var j = 0; j < STUDENT_HEADERS.length; j++) {
     var key = STUDENT_HEADERS[j];
@@ -759,6 +843,11 @@ function addPayment(paymentData) {
   var paymentSheet = ss.getSheetByName("HocPhi");
   var studentSheet = ss.getSheetByName("HocSinh");
 
+  if (!paymentData || !isFinite(Number(paymentData.amount)) || Number(paymentData.amount) <= 0) throw new Error("Số tiền không hợp lệ.");
+  validateEffectiveDate(paymentData.payment_date);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentData.period_start || "") || !/^\d{4}-\d{2}-\d{2}$/.test(paymentData.period_end || "") || paymentData.period_end < paymentData.period_start) throw new Error("Kỳ học phí không hợp lệ.");
+  var matchingStudent = getSheetRowsAsObjects(studentSheet, STUDENT_HEADERS).filter(function(student) { return String(student.id) === String(paymentData.student_id); })[0];
+  if (!matchingStudent) throw new Error("Không tìm thấy học sinh để thu học phí.");
   // Sinh mã giao dịch mới
   var lastPayRow = paymentSheet.getLastRow();
   var nextPayId = 10001;
@@ -889,9 +978,17 @@ function massGradeUp(options) {
   var countSkipped = 0;
   var mode = options.mode || "legacy";
   var targetSchoolYear = options.targetSchoolYear || inferSchoolYearForDate(options.effectiveDate);
-  var effectiveDate = options.effectiveDate || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  var effectiveDate = validateEffectiveDate(options.effectiveDate || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd"));
   var selectedIds = Array.isArray(options.studentIds) ? options.studentIds.map(function(id) { return id.toString(); }) : [];
   var useSelection = selectedIds.length > 0;
+  if (mode !== "legacy" && !useSelection) return { success: false, error: "Chọn ít nhất một học sinh." };
+  // Validate the complete selection before applying a batch.
+  getSheetRowsAsObjects(sheet, STUDENT_HEADERS).forEach(function(student) {
+    if (useSelection && selectedIds.indexOf(String(student.id)) === -1) return;
+    var nextStatus = mode === "return_to_study" ? "Đang học" : mode === "graduate_leave" ? "Nghỉ luôn" : mode === "grade_up_summer" ? (Number(student.grade) >= 12 ? "Nghỉ luôn" : "Tạm nghỉ") : student.status;
+    if (mode === "grade_up_summer" && (student.status !== "Đang học" || hasPromotionForSchoolYear(parseAcademicMeta(student.notes), targetSchoolYear))) return;
+    recordStudyTransition({ status: nextStatus, status_effective_date: effectiveDate }, student);
+  });
 
   for (var i = 0; i < grades.length; i++) {
     var rowNum = i + 2;
@@ -904,10 +1001,14 @@ function massGradeUp(options) {
     var meta = parseAcademicMeta(currentNotes);
 
     if (mode === "return_to_study") {
+      if (currentStatus === "Đang học") { countSkipped++; continue; }
+      var transition = { status: "Đang học", status_effective_date: effectiveDate };
+      recordStudyTransition(transition, { status: currentStatus, notes: currentNotes, registration_date: regValues[i][0] });
       sheet.getRange(rowNum, colStatus).setValue("Đang học");
-      sheet.getRange(rowNum, colRegDate).setValue(effectiveDate);
+      sheet.getRange(rowNum, STUDENT_HEADERS.indexOf("tuition_start") + 1).setValue(effectiveDate);
       meta.status_changes.push({
         type: "return_to_study",
+        registration_date: regValues[i][0] instanceof Date ? formatDate(regValues[i][0]) : regValues[i][0],
         school_year: targetSchoolYear,
         effective_date: effectiveDate,
         created_at: new Date().toISOString()
@@ -956,6 +1057,7 @@ function massGradeUp(options) {
           sheet.getRange(rowNum, colGrade).setValue(currentGrade + 1);
           if (mode === "grade_up_summer") {
             sheet.getRange(rowNum, colStatus).setValue("Tạm nghỉ");
+            meta.status_changes.push({ type: "pause", from_status: currentStatus, to_status: "Tạm nghỉ", effective_date: effectiveDate, school_year: targetSchoolYear, created_at: new Date().toISOString() });
             countPaused++;
           }
           meta.promotions.push({
@@ -984,7 +1086,7 @@ function massGradeUp(options) {
   if (mode === "return_to_study") {
     return {
       success: true,
-      message: "Đã cho học lại " + countReturned + " học sinh và cập nhật ngày nhập học năm học " + targetSchoolYear + " là " + effectiveDate + "."
+      message: "Đã cho học lại " + countReturned + " học sinh và bắt đầu tính phí lại cho năm học " + targetSchoolYear + " là " + effectiveDate + "."
     };
   }
   if (mode === "graduate_leave") {
@@ -1406,6 +1508,8 @@ function getPublicReport(studentId, token) {
     campuses_sessions: student.campuses_sessions,
     paid_until: student.paid_until,
     registration_date: student.registration_date,
+    tuition_start: student.tuition_start,
+    academic_meta: parseAcademicMeta(student.notes),
     study_start: student.study_start,
     study_start_precision: student.study_start_precision
   };
@@ -1495,4 +1599,3 @@ function getPublicSchedule(token) {
     students: publicStudents
   };
 }
-

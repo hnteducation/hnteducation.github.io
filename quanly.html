@@ -1097,7 +1097,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                         <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Trạng Thái Học Tập</label>
-                        <select id="sm-status" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium">
+                        <select id="sm-status" onchange="updateStudyTransitionFields()" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium">
                             <option value="Đang học">Đang học</option>
                             <option value="Tạm nghỉ">Tạm nghỉ</option>
                             <option value="Nghỉ luôn">Nghỉ luôn</option>
@@ -1110,6 +1110,11 @@
                     </div>
                 </div>
 
+                <div id="sm-transition-fields" class="hidden bg-amber-50 rounded-xl p-3 text-xs">
+                    <label for="sm-status-date" class="font-bold">Ngày bắt đầu nghỉ / học lại</label>
+                    <input type="date" id="sm-status-date" class="border rounded px-2 py-1 ml-2">
+                    <p class="mt-2">Học lại: kỳ phí mới bắt đầu từ ngày đã chọn. Ngày nhập học và lịch sử đóng phí được giữ lại; khoản đã đóng còn hiệu lực vẫn được ghi nhận.</p>
+                </div>
                 <div class="border-t border-slate-100 pt-4 flex justify-end gap-2 text-xs font-bold">
                     <button type="button" onclick="closeStudentModal()" class="bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 px-4 rounded-xl transition">Hủy bỏ</button>
                     <button type="submit" class="bg-brand-500 hover:bg-brand-600 text-white py-2 px-4 rounded-xl transition shadow-sm">Lưu dữ liệu</button>
@@ -1143,7 +1148,7 @@
                         <div class="flex flex-wrap items-center gap-1.5">
                             <span class="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.5 rounded text-[9px]" id="det-id">---</span>
                             <span class="bg-brand-50 text-brand-700 font-bold px-1.5 py-0.5 rounded text-[9px]" id="det-grade">---</span>
-                            <span id="det-status-badge">---</span>
+                            <span id="det-status-badge">---</span><p id="det-study-history" class="whitespace-pre-line text-xs text-slate-500 mt-2"></p>
                         </div>
                     </div>
                 </div>
@@ -1503,7 +1508,7 @@
                 </div>
 
                 <div class="bg-amber-50 border border-amber-100 rounded-xl p-3 text-[11px] text-amber-800 leading-relaxed">
-                    <span class="font-black">Gợi ý:</span> Lên lớp + tạm nghỉ hè sẽ tăng khối và chuyển học sinh sang Tạm nghỉ để dừng báo học phí kỳ mới. Khi học sinh quay lại, chọn Học lại năm học mới để đặt lại ngày nhập học năm học.
+                    <span class="font-black">Gợi ý:</span> Lên lớp + tạm nghỉ hè sẽ tăng khối và chuyển học sinh sang Tạm nghỉ để dừng báo học phí kỳ mới. Khi học sinh quay lại, chọn Học lại năm học mới để chọn ngày bắt đầu tính phí lại, giữ nguyên ngày nhập học.
                 </div>
 
                 <div class="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between">
@@ -2059,19 +2064,73 @@
         });
 
         // Gửi request an toàn tới Apps Script API (sử dụng POST đồng nhất để tránh timeout của GET)
+        const apiFlights = new Map();
+        const readApiActions = new Set(['login', 'getData', 'getSecurityConfig', 'createParentToken', 'createPublicScheduleToken']);
+        let syncRunning = false;
+        let syncAgain = false;
+
         async function safeFetch(action, payload = {}) {
             const url = state.config.apiUrl;
             const sessionToken = state.config.sessionToken;
             const passcode = action === 'login' ? state.config.passcode : '';
-
-            const response = await fetch(url, {
-                method: 'POST',
-                mode: 'cors',
-                headers: { 'Content-Type': 'text/plain' },
-                body: JSON.stringify({ passcode, sessionToken, action, ...payload })
-            });
-            return await response.json();
+            const mutation = !readApiActions.has(action);
+            const account = (sessionToken || '').split('.').slice(0, 2).join('.');
+            const signature = JSON.stringify({ url, account, action, payload });
+            if (apiFlights.has(signature)) return apiFlights.get(signature);
+            const operation = (async () => {
+                if (mutation && state.apiProtocolVersion !== 3) {
+                    const capability = await safeFetch('login');
+                    if (!capability.success || capability.protocolVersion !== 3) throw new Error('Cần cập nhật triển khai Google Apps Script trước khi lưu. Mở hướng dẫn cập nhật trong kho GitHub.');
+                    state.apiProtocolVersion = 3;
+                }
+                const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signature));
+                const key = 'hnt_request_' + Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+                let requestId;
+                if (mutation) {
+                    requestId = localStorage.getItem(key) || crypto.randomUUID();
+                    // Persist before sending: a reload must reuse the same request.
+                    localStorage.setItem(key, requestId);
+                }
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), 45000);
+                    try {
+                        const response = await fetch(url, {
+                            method: 'POST', mode: 'cors', redirect: 'follow',
+                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                            signal: controller.signal,
+                            body: JSON.stringify({ ...payload, passcode, sessionToken, action, requestId })
+                        });
+                        if (!response.ok) throw new Error('HTTP ' + response.status);
+                        const result = await response.json();
+                        if (result.retryable && attempt < 2) {
+                            clearTimeout(timer);
+                            await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
+                            continue;
+                        }
+                        if (mutation && !result.uncertain && !['addStudent', 'addPayment'].includes(action)) localStorage.removeItem(key);
+                        return result;
+                    } catch (error) {
+                        if (attempt === 2) throw new Error(mutation ? 'Chưa xác nhận lưu thành công. Giữ nguyên thông tin và thử lại để kiểm tra cùng mã yêu cầu; không tạo giao dịch mới.' : 'Không thể kết nối. Dữ liệu đã tải vẫn được giữ trên máy.');
+                    } finally {
+                        clearTimeout(timer);
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
+                }
+            })();
+            apiFlights.set(signature, operation);
+            try { return await operation; }
+            finally { apiFlights.delete(signature); }
         }
+
+        function getStudentBillingStart(student) {
+            return student.tuition_start || student.registration_date || student.reg_date || '';
+        }
+
+        window.addEventListener('online', () => fetchDataFromServer());
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && navigator.onLine && !state.isPublicView) fetchDataFromServer();
+        });
 
         // KHI TRANG WEB KHỞI ĐỘNG (SWR Local Caching)
         window.addEventListener('DOMContentLoaded', () => {
@@ -2479,6 +2538,8 @@
         // TẢI TOÀN BỘ DỮ LIỆU TỪ GOOGLE SHEET (Sử dụng safeFetch tự phục hồi)
         async function fetchDataFromServer() {
             if (!isConfigured()) return;
+            if (syncRunning) { syncAgain = true; return; }
+            syncRunning = true;
 
             const syncIcon = document.getElementById('sync-icon');
             if (syncIcon) syncIcon.classList.add('animate-spin');
@@ -2487,23 +2548,26 @@
                 const result = await safeFetch('getData');
 
                 if (result.success) {
+                    state.apiProtocolVersion = result.protocolVersion || 0;
                     state.students = result.students || [];
                     state.payments = result.payments || [];
                     state.albums = result.albums || [];
                     state.journals = result.journals || [];
 
                     // Lưu dữ liệu vào cache LocalStorage để xem tức thời ở lần sau
+                    try {
                     localStorage.setItem('hnt_cached_students', JSON.stringify(state.students));
                     localStorage.setItem('hnt_cached_payments', JSON.stringify(state.payments));
                     localStorage.setItem('hnt_cached_albums', JSON.stringify(state.albums));
                     localStorage.setItem('hnt_cached_journals', JSON.stringify(state.journals));
+                    } catch (cacheError) { console.warn('Không thể lưu bộ nhớ đệm', cacheError); }
 
                     if (state.isPublicView) {
                         renderPublicScheduleGrid();
                         return;
                     }
 
-                    updateConnectionStatusBar(true, `Đồng bộ thành công. Đang quản lý ${state.students.length} học sinh.`);
+                    updateConnectionStatusBar(true, `Đã đồng bộ: ${state.students.filter(s => s.status === 'Đang học').length} đang học · ${state.students.filter(s => s.status === 'Tạm nghỉ').length} tạm nghỉ · ${state.students.length} hồ sơ lưu giữ.`);
 
                     calculateStats();
                     renderStudentsTable();
@@ -2519,16 +2583,21 @@
                         switchTab('settings');
                     }
                     updateConnectionStatusBar(false, 'Lỗi đồng bộ dữ liệu: ' + result.error);
-                    showToast('error', 'Phiên đăng nhập hết hạn', result.error || 'Vui lòng nhập lại pass để tiếp tục.');
+                    showToast('error', 'Không thể đồng bộ', result.error || 'Vui lòng thử lại.');
                 }
             } catch (err) {
                 console.error(err);
                 updateConnectionStatusBar(false, 'Kết nối đến Google Sheets bị gián đoạn.');
                 showToast('warning', 'Mất kết nối API', 'Đang hiển thị dữ liệu lưu trữ tạm thời.');
             } finally {
+                syncRunning = false;
+                if (syncAgain) {
+                    syncAgain = false;
+                    fetchDataFromServer();
+                }
                 if (syncIcon) {
                     setTimeout(() => {
-                        syncIcon.classList.remove('animate-spin');
+                        if (!syncRunning) syncIcon.classList.remove('animate-spin');
                     }, 500);
                 }
             }
@@ -2868,17 +2937,8 @@
             document.getElementById('qp-sum-rate').textContent = rate.toLocaleString('vi-VN') + 'đ';
 
             // Tự động gợi ý ngày bắt đầu: paid_until + 1 ngày (hoặc ngày nhập học)
-            let startPeriod = new Date();
-            const tuitionInfo = getTuitionCycleInfo(student.paid_until, student.registration_date);
-            if (student.paid_until) {
-                const prevPaidUntil = new Date(student.paid_until);
-                prevPaidUntil.setDate(prevPaidUntil.getDate() + 1);
-                startPeriod = prevPaidUntil;
-            } else {
-                if (student.registration_date) {
-                    startPeriod = new Date(student.registration_date);
-                }
-            }
+            const tuitionInfo = getTuitionCycleInfo(student.paid_until, getStudentBillingStart(student));
+            const startPeriod = new Date(tuitionInfo.dueStart);
             document.getElementById('qp-sum-paid-until').textContent = tuitionInfo.displayText;
             document.getElementById('qp-sum-paid-until').className = `font-bold mt-0.5 ${tuitionInfo.colorClass}`;
 
@@ -3038,7 +3098,7 @@
             const amount = parseInt(document.getElementById('qp-amount').value);
 
             let message = '';
-            const tuitionInfo = getTuitionCycleInfo(student.paid_until, student.registration_date);
+            const tuitionInfo = getTuitionCycleInfo(student.paid_until, getStudentBillingStart(student));
             if (tuitionInfo.status === 'due') {
                 message = `HNT Education thông báo: Chào Anh/Chị phụ huynh bé ${student.name}, học phí kỳ ${tuitionInfo.rangeText} hiện đã quá hạn ${tuitionInfo.overdueDays} ngày. Nhờ Anh/Chị đóng học phí kỳ này với số tiền là ${amount.toLocaleString('vi-VN')}đ. Trân trọng cảm ơn Anh/Chị!`;
             } else if (tuitionInfo.status === 'warning') {
@@ -3080,7 +3140,7 @@
                 return;
             }
 
-            if (amount <= 0) {
+            if (!Number.isFinite(amount) || amount <= 0) {
                 showToast('warning', 'Số tiền không hợp lệ', 'Học phí phải lớn hơn 0đ.');
                 return;
             }
@@ -3088,7 +3148,9 @@
             const primaryName = studentName;
             const amountTotal = amount;
             const count = 1 + state.groupPaymentStudents.length;
-            const eachAmount = Math.round(amountTotal / count);
+            const eachAmount = Math.floor(amountTotal / count);
+            const primaryAmount = amountTotal - eachAmount * (count - 1);
+            if (eachAmount <= 0) { showToast('warning', 'Số tiền quá nhỏ', 'Mỗi học sinh cần có số tiền lớn hơn 0.'); return; }
 
             const confirmMsg = `Xác nhận thu phí học sinh:\n\n` +
                                `- Họ tên: ${studentName}\n` +
@@ -3134,7 +3196,7 @@
                     paymentData: {
                         student_id: studentId,
                         student_name: primaryName,
-                        amount: eachAmount,
+                        amount: primaryAmount,
                         payment_date: paymentDate,
                         period_start: periodStart,
                         period_end: periodEnd,
@@ -3144,7 +3206,7 @@
                 });
                 if (resultPrimary && resultPrimary.success) {
                     successCount++;
-                }
+                } else { throw new Error(resultPrimary.error || 'Chưa lưu được giao dịch chính.'); }
 
                 // Các giao dịch học sinh phụ đóng chung
                 for (let i = 0; i < state.groupPaymentStudents.length; i++) {
@@ -3164,7 +3226,7 @@
                     });
                     if (resultGs && resultGs.success) {
                         successCount++;
-                    }
+                    } else { throw new Error(resultGs.error || 'Chưa hoàn tất nhóm. Giữ nguyên nhóm và thử lại.'); }
                 }
 
                 if (successCount === count) {
@@ -3180,7 +3242,7 @@
                 }
             } catch (err) {
                 console.error(err);
-                showToast('error', 'Lỗi kết nối mạng', 'Không thể gửi dữ liệu lên máy chủ.');
+                showToast('error', 'Lỗi kết nối mạng', err.message || 'Không thể gửi dữ liệu lên máy chủ.');
             } finally {
                 hideLoader();
             }
@@ -3298,7 +3360,7 @@
 
             const actualRevenue = periodPayments.reduce((sum, p) => sum + parseInt(p.amount || 0), 0);
             const dueCount = activeStudents.filter(s => {
-                return getTuitionCycleInfo(s.paid_until, s.registration_date, todayStr).status === 'due';
+                return getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr).status === 'due';
             }).length;
 
             const statsContainer = document.getElementById('stats-summary-cards');
@@ -3917,6 +3979,8 @@
                         study_start_precision: result.student.study_start_precision,
                         paid_until: result.student.paid_until,
                         reg_date: result.student.registration_date,
+                        tuition_start: result.student.tuition_start,
+                        academic_meta: result.student.academic_meta,
                         payments: result.payments.map(p => ({
                             date: p.payment_date,
                             amount: p.amount,
@@ -3930,7 +3994,7 @@
 
                 // Xác định trạng thái học phí
                 const todayStr = ensureYYYYMMDD(new Date());
-                const tuitionInfo = getTuitionCycleInfo(decodedData.paid_until, decodedData.reg_date, todayStr);
+                const tuitionInfo = getTuitionCycleInfo(decodedData.paid_until, getStudentBillingStart(decodedData), todayStr);
                 let tuitionBadge = `<span class="${tuitionInfo.badgeClass} border px-2.5 py-0.5 rounded-full font-bold text-[10px]">${tuitionInfo.badgeText}</span>`;
                 let tuitionColor = tuitionInfo.colorClass;
                 let tuitionDisplayText = tuitionInfo.displayText;
@@ -4162,6 +4226,10 @@
             document.getElementById('det-school').textContent = student.school || 'Tự do';
             document.getElementById('det-class-school').textContent = student.class_school || '--';
             document.getElementById('det-reg-date').textContent = student.registration_date ? formatDateToVN(student.registration_date) : '--';
+            const history = getStudentAcademicMeta(student.notes).status_changes;
+            document.getElementById('det-study-history').textContent =
+                'Bắt đầu tính phí hiện tại: ' + (getStudentBillingStart(student) ? formatDateToVN(getStudentBillingStart(student)) : '--') +
+                (history.length ? '\n' + history.map(item => formatDateToVN(item.effective_date) + ': ' + (item.to_status || (item.type === 'return_to_study' ? 'Học lại' : item.type === 'pause' ? 'Tạm nghỉ' : 'Đã nghỉ'))).join('\n') : '\nChưa có lần nghỉ / học lại được ghi nhận.');
             const detSchoolYear = document.getElementById('det-school-year');
             if (detSchoolYear) detSchoolYear.textContent = getCurrentSchoolYear();
             const detStudyStart = document.getElementById('det-study-start');
@@ -4174,7 +4242,7 @@
 
             
             const paidUntilEl = document.getElementById('det-paid-until');
-            const detailTuitionInfo = getTuitionCycleInfo(student.paid_until, student.registration_date);
+            const detailTuitionInfo = getTuitionCycleInfo(student.paid_until, getStudentBillingStart(student));
             if (student.status && student.status !== 'Đang học') {
                 paidUntilEl.textContent = student.status === 'Tạm nghỉ' ? 'Đang tạm nghỉ, chưa tạo kỳ thu mới' : 'Đã nghỉ học';
                 paidUntilEl.className = 'font-black text-slate-500';
@@ -4423,6 +4491,8 @@
                     study_start_precision: student.study_start_precision,
                     paid_until: student.paid_until,
                     reg_date: student.registration_date,
+                    tuition_start: student.tuition_start,
+                    academic_meta: getStudentAcademicMeta(student.notes),
                     payments: state.payments.filter(p => p.student_id.toString() === student.id.toString()).map(p => ({
                         date: p.payment_date,
                         amount: p.amount,
@@ -4558,7 +4628,7 @@
                 <span class="mx-1.5 text-slate-300">|</span>
                 <span><i class="fa-solid fa-school text-slate-400 mr-1"></i> Trường: ${student.school || 'Tự do'}</span>
             `;
-            const tuitionInfo = getTuitionCycleInfo(student.paid_until, student.registration_date);
+            const tuitionInfo = getTuitionCycleInfo(student.paid_until, getStudentBillingStart(student));
             document.getElementById('db-student-paid-until').textContent = tuitionInfo.displayText;
             document.getElementById('db-student-paid-until').className = "text-xs font-black block mt-0.5 " + tuitionInfo.colorClass;
 
@@ -4719,7 +4789,8 @@
             }
             if (tuitionStatusVal) {
                 filtered = filtered.filter(s => {
-                    const status = getTuitionStatus(s.paid_until, s.registration_date, todayStr);
+                    if (s.status !== 'Đang học') return false;
+                    const status = getTuitionStatus(s.paid_until, getStudentBillingStart(s), todayStr);
                     return status === tuitionStatusVal;
                 });
             }
@@ -4775,7 +4846,7 @@
 
             tbody.innerHTML = '';
             if (mobileList) mobileList.innerHTML = '';
-            document.getElementById('table-showing-text').textContent = `Hiển thị ${filtered.length} / ${state.students.length} học sinh`;
+            document.getElementById('table-showing-text').textContent = `Hiển thị ${filtered.length} / ${state.students.length} hồ sơ · ${state.students.filter(s => s.status === 'Đang học').length} đang học`;
 
             if (filtered.length === 0) {
                 tbody.innerHTML = `
@@ -4821,7 +4892,7 @@
                 if (s.status !== 'Đang học') {
                     tuitionBadge = '<span class="text-slate-400 italic">--</span>';
                 } else {
-                    const tuitionInfo = getTuitionCycleInfo(s.paid_until, s.registration_date, todayStr);
+                    const tuitionInfo = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr);
                     const status = tuitionInfo.status;
                     const colorClass = tuitionInfo.colorClass;
 
@@ -4909,7 +4980,7 @@
                     if (s.status !== 'Đang học') {
                         cardTuitionBadge = `<span class="bg-slate-50 text-slate-400 border border-slate-150 px-2 py-0.5 rounded-full text-[9px] font-bold">Không học</span>`;
                     } else {
-                        const tuitionInfo = getTuitionCycleInfo(s.paid_until, s.registration_date, todayStr);
+                        const tuitionInfo = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr);
                         if (tuitionInfo.status === 'paid') {
                             cardTuitionBadge = `<span class="bg-green-50 text-green-700 border border-green-150 px-2 py-0.5 rounded-full text-[9px] font-bold">Đã đóng phí</span>`;
                         } else if (tuitionInfo.status === 'warning') {
@@ -4936,7 +5007,7 @@
                             </div>
                         </div>
                         <div class="bg-slate-50 p-2.5 rounded-xl text-[10px] text-slate-600 grid grid-cols-2 gap-2">
-                            <div><span class="text-slate-400 font-bold block">Kỳ cần đóng:</span> <span class="font-semibold text-slate-700">${getTuitionCycleInfo(s.paid_until, s.registration_date, todayStr).displayText}</span></div>
+                            <div><span class="text-slate-400 font-bold block">Kỳ cần đóng:</span> <span class="font-semibold text-slate-700">${getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr).displayText}</span></div>
                             <div><span class="text-slate-400 font-bold block">Học phí lý thuyết:</span> <span class="font-semibold text-slate-700">${parseInt(s.tuition_rate || DEFAULT_TUITION_RATE).toLocaleString('vi-VN')}đ</span></div>
                         </div>
                         <div class="flex justify-end gap-1.5 pt-1.5 border-t border-slate-100 text-[10px] font-bold">
@@ -5082,7 +5153,7 @@
 
                 let tuitionStatusText = 'Chưa đóng phí';
                 let tuitionStatusClass = 'bg-red-50 text-red-700 border-red-100';
-                const attendanceTuitionInfo = getTuitionCycleInfo(s.paid_until, s.registration_date);
+                const attendanceTuitionInfo = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s));
                 if (attendanceTuitionInfo.status === 'paid') {
                     tuitionStatusText = attendanceTuitionInfo.displayText;
                     tuitionStatusClass = 'bg-green-50 text-green-700 border-green-200';
@@ -5586,7 +5657,7 @@
                 expectedSum += rate;
 
                 const hasPaidThisMonth = classPayments.some(p => p.student_id && s.id && p.student_id.toString() === s.id.toString());
-                const isOverdue = getTuitionCycleInfo(s.paid_until, s.registration_date, todayStr).status === 'due';
+                const isOverdue = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr).status === 'due';
 
                 if (!hasPaidThisMonth && isOverdue) {
                     missingSum += rate;
@@ -5694,6 +5765,15 @@
         }
 
         // THÊM / SỬA HỌC SINH MODAL OPEN
+        function updateStudyTransitionFields() {
+            const originalId = document.getElementById('sm-student-id').dataset.originalId;
+            const student = state.students.find(s => String(s.id) === String(originalId));
+            const oldStatus = student ? student.status : 'Đang học';
+            const changed = document.getElementById('sm-status').value !== oldStatus;
+            document.getElementById('sm-transition-fields').classList.toggle('hidden', !changed);
+            document.getElementById('sm-status-date').required = changed;
+        }
+
         function openAddStudentModal() {
             if (!requireClientPermission('canAddStudent', 'Tài khoản hiện tại không được thêm học sinh.')) return;
             document.getElementById('student-modal-title').innerHTML = `<i class="fa-solid fa-user-plus text-brand-500"></i> Thêm Học Sinh Mới`;
@@ -5704,6 +5784,9 @@
             document.getElementById('sm-student-id').placeholder = 'Sẽ tự động sinh...';
             document.getElementById('sm-student-id').dataset.originalId = '';
             document.getElementById('sm-avatar-url').value = '';
+            document.getElementById('sm-status-date').value = ensureYYYYMMDD(new Date());
+            document.getElementById('sm-status-date').max = ensureYYYYMMDD(new Date());
+            updateStudyTransitionFields();
 
             document.getElementById('sm-avatar-preview').classList.add('hidden');
             document.getElementById('sm-avatar-placeholder').classList.remove('hidden');
@@ -5763,6 +5846,9 @@
             document.getElementById('sm-study-start').value = student.study_start || '';
             document.getElementById('sm-study-start-precision').value = student.study_start_precision || inferStudyStartPrecision(student.study_start || '');
             document.getElementById('sm-status').value = student.status || 'Đang học';
+            document.getElementById('sm-status-date').value = ensureYYYYMMDD(new Date());
+            document.getElementById('sm-status-date').max = ensureYYYYMMDD(new Date());
+            updateStudyTransitionFields();
             document.getElementById('sm-notes').value = getStudentNoteOnly(student.notes || '');
 
             // Ngày sinh
@@ -6006,6 +6092,7 @@
                 study_start_precision: document.getElementById('sm-study-start-precision').value,
                 campuses_sessions: JSON.stringify(selectedSessions),
                 status: document.getElementById('sm-status').value,
+                status_effective_date: document.getElementById('sm-status-date').value,
                 notes: notesToSave,
 
                 father_name: document.getElementById('sm-father-name').value.trim(),
@@ -6040,7 +6127,7 @@
                 }
             } catch (err) {
                 console.error(err);
-                showToast('error', 'Lỗi kết nối mạng', 'Không thể hoàn tất thao tác.');
+                showToast('error', 'Lỗi kết nối mạng', err.message || 'Không thể hoàn tất thao tác.');
             } finally {
                 hideLoader();
             }
@@ -6611,12 +6698,13 @@
                 };
             }
 
-            if (student && student.status && student.status !== 'Đang học') {
-                return {
-                    boxClass: 'bg-slate-50 border-slate-200/50 text-slate-400',
-                    statusText: student.status === 'Tạm nghỉ' ? 'Tạm nghỉ' : 'Đã nghỉ',
-                    dotColor: 'bg-slate-300'
-                };
+            const meta = student.academic_meta || getStudentAcademicMeta(student.notes);
+            const events = [...(meta.status_changes || [])].sort((a, b) => (a.effective_date || '').localeCompare(b.effective_date || ''));
+            const latestAtStart = events.filter(item => item.effective_date <= firstDayStr).pop();
+            const returnsInMonth = events.some(item => item.type === 'return_to_study' && item.effective_date >= firstDayStr && item.effective_date <= lastDayStr);
+            const isPause = latestAtStart && ['pause', 'graduate_leave'].includes(latestAtStart.type);
+            if ((isPause && !returnsInMonth) || (!events.length && student.status && student.status !== 'Đang học')) {
+                return { boxClass: 'bg-slate-50 border-slate-200/50 text-slate-400', statusText: latestAtStart && latestAtStart.type === 'graduate_leave' ? 'Đã nghỉ' : 'Tạm nghỉ', dotColor: 'bg-slate-300' };
             }
 
             const regDateStr = ensureYYYYMMDD(student && (student.registration_date || student.reg_date));
@@ -8225,7 +8313,7 @@ publicView.innerHTML = `
                 const payments = state.payments.filter(p => p.student_id && s.id && p.student_id.toString() === s.id.toString())
                                               .sort((a, b) => (b.payment_date || '').localeCompare(a.payment_date || ''));
                 s.lastPayment = payments.length > 0 ? payments[0] : null;
-                s.tuition_status = getTuitionStatus(s.paid_until, s.registration_date, todayStr);
+                s.tuition_status = getTuitionStatus(s.paid_until, getStudentBillingStart(s), todayStr);
             });
 
             // Gom nhóm học sinh theo Khối + Trường
@@ -8320,7 +8408,7 @@ publicView.innerHTML = `
                     }).join('') + `</div>`;
                 } else {
                     tagsHtml = `<div class="flex flex-col gap-1.5 py-1">` + group.students.map(s => {
-                        const tuitionInfo = getTuitionCycleInfo(s.paid_until, s.registration_date, todayStr);
+                        const tuitionInfo = getTuitionCycleInfo(s.paid_until, getStudentBillingStart(s), todayStr);
                         const tuitionStatus = tuitionInfo.status;
                         let dot = '🔴';
                         let tagColorClass = 'text-red-500';
