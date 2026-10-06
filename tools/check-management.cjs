@@ -40,7 +40,7 @@ const context = vm.createContext({
   console, Date,
   SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush() {} },
   Session: { getScriptTimeZone: () => 'Asia/Bangkok' },
-  Utilities: { formatDate: date => date.toISOString().slice(0, 10), DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (algorithm, value) => crypto.createHash(algorithm).update(value).digest(), base64EncodeWebSafe: value => Buffer.from(value).toString('base64url') },
+  Utilities: { getUuid: () => crypto.randomUUID(), formatDate: date => date.toISOString().slice(0, 10), DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (algorithm, value) => crypto.createHash(algorithm).update(value).digest(), base64EncodeWebSafe: value => Buffer.from(value).toString('base64url') },
   LockService: { getScriptLock: () => ({ tryLock: () => { if (locked) return false; locked = true; return true; }, hasLock: () => locked, releaseLock: () => { locked = false; } }) },
   ContentService: { MimeType: { JSON: 'json', TEXT: 'text' }, createTextOutput: value => ({ value, setMimeType() { return this; } }) }
 });
@@ -64,6 +64,9 @@ assert.equal(sheets.get('HocPhi').getLastRow(), 2);
 const invalidPayment = request({ ...payment, requestId: 'bad-payment', paymentData: { ...payment.paymentData, student_id: 'missing' } });
 assert.equal(invalidPayment.success, false);
 assert.equal(sheets.get('HocPhi').getLastRow(), 2, 'invalid student cannot create orphan payment');
+assert.equal(context.getSheetRowsAsObjects(sheets.get('HocSinh'), context.STUDENT_HEADERS)[0].paid_until, '', 'payment after a gap must not mark the missing period paid');
+assert.equal(request({ ...payment, requestId: 'fill-january', paymentData: { ...payment.paymentData, payment_date: '2026-01-20', period_start: '2026-01-05', period_end: '2026-01-31' } }).success, true);
+assert.equal(context.getSheetRowsAsObjects(sheets.get('HocSinh'), context.STUDENT_HEADERS)[0].paid_until, '2026-02-28', 'filling a gap joins existing prepaid coverage');
 assert.equal(request({ action: 'updateStudent', requestId: 'pause-one', studentId: id, studentData: { status: 'Tạm nghỉ', status_effective_date: '2026-03-01' } }).success, true);
 assert.equal(request({ action: 'updateStudent', requestId: 'return-one', studentId: id, studentData: { status: 'Đang học', status_effective_date: '2026-04-15' } }).success, true);
 let student = context.getSheetRowsAsObjects(sheets.get('HocSinh'), context.STUDENT_HEADERS)[0];
@@ -112,6 +115,30 @@ assert.equal(request({ action: 'updateStudent', requestId: 'free-again', student
 const exemptAgain = context.getSheetRowsAsObjects(sheets.get('HocSinh'), context.STUDENT_HEADERS).find(s => s.id === freeId);
 assert.equal(exemptAgain.status, 'Đang học', 'fee exemption must not change enrollment status');
 
+const beforeBatch = sheets.get('HocPhi').getLastRow();
+const bulkInput = { action: 'addPaymentBatch', requestId: 'invalid-group', payments: [
+  { ...payment.paymentData, student_id: id, period_start: '2026-06-01', period_end: '2026-08-31' },
+  { ...payment.paymentData, student_id: 'missing', period_start: '2026-06-01', period_end: '2026-08-31' }
+] };
+assert.equal(request(bulkInput).success, false);
+assert.equal(sheets.get('HocPhi').getLastRow(), beforeBatch, 'invalid group must write no recipient');
+const second = request({ action: 'addStudent', requestId: 'another-paid-student', studentData: { ...input, name: 'Học sinh thứ hai' } }).student;
+bulkInput.requestId = 'valid-group';
+bulkInput.payments[1].student_id = second.id;
+let bulk = request(bulkInput);
+assert.equal(bulk.success, true);
+assert.equal(bulk.payment_ids.length, 2);
+assert.equal(sheets.get('HocPhi').getLastRow(), beforeBatch + 2);
+assert.equal(request(bulkInput).group_id, bulk.group_id);
+assert.equal(sheets.get('HocPhi').getLastRow(), beforeBatch + 2, 'batch retry must not duplicate any recipient');
+const bulkRows = context.getSheetRowsAsObjects(sheets.get('HocPhi'), context.PAYMENT_HEADERS).slice(-2);
+assert.equal(bulkRows[0].group_id, bulkRows[1].group_id);
+assert.equal(JSON.parse(bulkRows[0].period_breakdown).length, 3);
+assert.equal(JSON.parse(bulkRows[0].period_breakdown).reduce((sum, part) => sum + part.amount, 0), bulkRows[0].amount);
+const badParts = { ...payment.paymentData, student_id: second.id, period_breakdown: [{ period_start: '2026-02-01', period_end: '2026-02-28', amount: 10 }] };
+assert.equal(request({ action: 'addPaymentBatch', requestId: 'unbalanced-detail', payments: [badParts] }).success, false);
+assert.equal(sheets.get('HocPhi').getLastRow(), beforeBatch + 2, 'invalid detailed amounts must write nothing');
+
 // Run actual frontend functions in an isolated browser-like context.
 function fn(name) {
   const match = html.match(new RegExp('        (?:async )?function ' + name + '\\([^]*?\\n        }'));
@@ -124,16 +151,16 @@ const browser = vm.createContext({ console, Date, crypto: crypto.webcrypto, Text
   setTimeout, clearTimeout,
   localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
   window: { addEventListener() {} }, document: { addEventListener() {} },
-  state: { config: { apiUrl: 'https://example.test/exec', sessionToken: 'master.master.123.sig' }, apiProtocolVersion: 4, payments: [] },
+  state: { config: { apiUrl: 'https://example.test/exec', sessionToken: 'master.master.123.sig' }, apiProtocolVersion: 5, payments: [] },
   fetch: async (url, options) => {
     requests.push(JSON.parse(options.body));
     if (requests.length === 1) throw new Error('response lost after server write');
-    return { ok: true, json: async () => ({ success: true, protocolVersion: 4 }) };
+    return { ok: true, json: async () => ({ success: true, protocolVersion: 5 }) };
   }
 });
 browser.DEFAULT_TUITION_RATE = 500000;
 vm.runInContext(html.slice(html.indexOf('        const apiFlights'), html.indexOf('        // KHI TRANG WEB')), browser);
-['ensureYYYYMMDD', 'formatDateToYYYYMMDD', 'formatDateToVN', 'addDays', 'addMonthsToDate', 'getDaysDifferenceFromToday', 'getTuitionCycleInfo', 'getStudentAcademicMeta', 'getStudentPaymentsForTimelineMonth', 'getStudentTuitionTimelineMonthInfo', 'normalizeStudyStart', 'inferStudyStartPrecision'].forEach(name => vm.runInContext(fn(name), browser));
+['paymentISODate', 'paymentMonthBoundary', 'paymentAddDays', 'splitPaymentPeriod', 'allocatePaymentAmount', 'assertPaymentPeriodAllowed', 'ensureYYYYMMDD', 'formatDateToYYYYMMDD', 'formatDateToVN', 'addDays', 'addMonthsToDate', 'getDaysDifferenceFromToday', 'getTuitionCycleInfo', 'getStudentAcademicMeta', 'getStudentPaymentsForTimelineMonth', 'getStudentTuitionTimelineMonthInfo', 'normalizeStudyStart', 'inferStudyStartPrecision'].forEach(name => vm.runInContext(fn(name), browser));
 (async () => {
   const [a, b] = await Promise.all([browser.safeFetch('addPayment', { paymentData: { amount: 42 } }), browser.safeFetch('addPayment', { paymentData: { amount: 42 } })]);
   assert(a.success && b.success);

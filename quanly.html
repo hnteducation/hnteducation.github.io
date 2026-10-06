@@ -277,7 +277,7 @@
                                 </div>
                                 <div>
                                     <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">Kết thúc</label>
-                                    <input type="text" id="qp-period-end" placeholder="Chọn ngày..."
+                                    <input type="text" id="qp-period-end" onchange="handleQuickPaymentEndChange()" placeholder="Chọn ngày..."
                                            class="w-full bg-white border border-slate-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition font-medium">
                                 </div>
                              </div>
@@ -289,6 +289,20 @@
                                        class="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition font-medium">
                             </div>
 
+                            <div class="text-[10px] text-slate-500">
+                                <span id="qp-note-suggestion"></span>
+                                <button type="button" onclick="useSuggestedPaymentNote()" class="text-brand-600 underline ml-1">Dùng ghi chú gợi ý</button>
+                            </div>
+                            <div class="bg-slate-50 rounded-xl p-3">
+                                <p class="text-xs font-bold mb-2">Xem trước giao dịch từng học sinh</p>
+                                <p class="text-[10px] text-slate-500 mb-2">Gợi ý tiền theo mức phí và độ dài kỳ; tiền nhập tay được phân bổ theo tỷ lệ này. Có thể sửa riêng từng em. 1,5 tháng = 1 tháng + 15 ngày. Kỳ lẻ phân bổ theo số ngày của kỳ, không tự tính hoàn tiền.</p>
+                        <div id="qp-payment-preview"></div>
+                                <div id="qp-pending-payment" class="hidden mt-2 text-xs text-amber-800">
+                                    <p>Có khoản thu chưa xác nhận. Kiểm tra khoản này trước khi tạo khoản khác.</p>
+                                    <button type="button" onclick="resumePendingPaymentBatch()" class="underline font-bold mr-2">Kiểm tra / gửi lại cùng yêu cầu</button>
+                                    <button type="button" onclick="clearPendingPaymentBatch()" class="underline">Đã đối chiếu Sheet, bỏ yêu cầu chờ</button>
+                                </div>
+                            </div>
                             <!-- Submit -->
                             <div class="pt-1">
                                 <button type="submit" class="w-full bg-brand-500 hover:bg-brand-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md transition flex items-center justify-center gap-1.5 text-xs">
@@ -1597,10 +1611,10 @@
             datePickers.periodStart = flatpickr("#qp-period-start", {
                 ...config,
                 onChange: function() {
-                    autoCalculatePeriodEnd();
+                    recalculateQuickPaymentEndDate();
                 }
             });
-            datePickers.periodEnd = flatpickr("#qp-period-end", config);
+            datePickers.periodEnd = flatpickr("#qp-period-end", { ...config, onChange: handleQuickPaymentEndChange });
             datePickers.birthDate = flatpickr("#sm-birth-date", {
                 ...config,
                 onChange: function() {
@@ -2084,10 +2098,10 @@
             const signature = JSON.stringify({ url, account, action, payload });
             if (apiFlights.has(signature)) return apiFlights.get(signature);
             const operation = (async () => {
-                if (mutation && state.apiProtocolVersion !== 4) {
+                if (mutation && state.apiProtocolVersion !== 5) {
                     const capability = await safeFetch('login');
-                    if (!capability.success || capability.protocolVersion !== 4) throw new Error('Cần cập nhật triển khai Google Apps Script trước khi lưu. Mở hướng dẫn cập nhật trong kho GitHub.');
-                    state.apiProtocolVersion = 4;
+                    if (!capability.success || capability.protocolVersion !== 5) throw new Error('Cần cập nhật triển khai Google Apps Script trước khi lưu. Mở hướng dẫn cập nhật trong kho GitHub.');
+                    state.apiProtocolVersion = 5;
                 }
                 const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signature));
                 const key = 'hnt_request_' + Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
@@ -2114,7 +2128,7 @@
                             await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
                             continue;
                         }
-                        if (mutation && !result.uncertain && !['addStudent', 'addPayment'].includes(action)) localStorage.removeItem(key);
+                        if (mutation && !result.uncertain && (!result.success || !['addStudent', 'addPayment', 'addPaymentBatch'].includes(action))) localStorage.removeItem(key);
                         return result;
                     } catch (error) {
                         if (attempt === 2) throw new Error(mutation ? 'Chưa xác nhận lưu thành công. Giữ nguyên thông tin và thử lại để kiểm tra cùng mã yêu cầu; không tạo giao dịch mới.' : 'Không thể kết nối. Dữ liệu đã tải vẫn được giữ trên máy.');
@@ -2192,6 +2206,7 @@
             }
 
             loadConfigFromLocalStorage();
+            refreshPendingPaymentNotice();
             applyAccessControl();
             initDatePickers();
             resetQuickPaymentDates();
@@ -2584,6 +2599,7 @@
 
                 if (result.success) {
                     state.apiProtocolVersion = result.protocolVersion || 0;
+                    refreshPendingPaymentNotice();
                     state.students = result.students || [];
                     state.payments = result.payments || [];
                     state.albums = result.albums || [];
@@ -2733,15 +2749,226 @@
         // 4. LOGIC TAB 1: NHẬP HỌC PHÍ NHANH
 
         // Khởi động lại ngày của kỳ học phí
+        function paymentISODate(value) {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) throw new Error('Ngày kỳ thu không hợp lệ.');
+            const date = new Date(value + 'T00:00:00Z');
+            if (isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) throw new Error('Ngày kỳ thu không tồn tại.');
+            return date;
+        }
+
+        function paymentMonthBoundary(start, months) {
+            const date = paymentISODate(start);
+            const day = date.getUTCDate();
+            date.setUTCDate(1);
+            date.setUTCMonth(date.getUTCMonth() + months);
+            const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+            date.setUTCDate(Math.min(day, last));
+            return date.toISOString().slice(0, 10);
+        }
+
+        function paymentAddDays(start, days) {
+            const date = paymentISODate(start);
+            date.setUTCDate(date.getUTCDate() + days);
+            return date.toISOString().slice(0, 10);
+        }
+
+        function splitPaymentPeriod(start, end) {
+            paymentISODate(start); paymentISODate(end);
+            if (start > end) throw new Error('Ngày kết thúc phải từ ngày bắt đầu trở đi.');
+            const parts = [];
+            for (let index = 0; index < 120; index++) {
+                const from = paymentMonthBoundary(start, index);
+                if (from > end) return parts;
+                const next = paymentMonthBoundary(start, index + 1);
+                const fullEnd = paymentAddDays(next, -1);
+                const to = end < fullEnd ? end : fullEnd;
+                const days = Math.round((paymentISODate(to) - paymentISODate(from)) / 86400000) + 1;
+                const fullDays = Math.round((paymentISODate(next) - paymentISODate(from)) / 86400000);
+                parts.push({ period_start: from, period_end: to, days, weight: days / fullDays, partial: to < fullEnd });
+            }
+            throw new Error('Kỳ thu quá dài (tối đa 10 năm).');
+        }
+
+        function allocatePaymentAmount(total, weights) {
+            if (!Number.isSafeInteger(total) || total < 0 || !weights.length || weights.some(w => !Number.isFinite(w) || w < 0)) throw new Error('Số tiền phân bổ không hợp lệ.');
+            const sum = weights.reduce((a, b) => a + b, 0);
+            if (!sum) throw new Error('Không có kỳ thu có phí.');
+            const raw = weights.map(w => total * w / sum);
+            const values = raw.map(Math.floor);
+            let remaining = total - values.reduce((a, b) => a + b, 0);
+            const order = raw.map((v, index) => ({ index, fraction: v - values[index] })).sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+            for (let i = 0; i < remaining; i++) values[order[i % order.length].index]++;
+            return values;
+        }
+
+        function assertPaymentPeriodAllowed(student, start, end, meta) {
+            paymentISODate(start); paymentISODate(end);
+            if (start > end) throw new Error('Ngày kết thúc phải từ ngày bắt đầu trở đi.');
+            const statuses = [...(meta.status_changes || [])].filter(e => e.effective_date).sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+            if (student.status !== 'Đang học' && !statuses.some(e => ['pause', 'graduate_leave'].includes(e.type))) throw new Error('Học sinh đang nghỉ nhưng chưa có ngày nghỉ. Cập nhật lịch sử trước khi thu.');
+            for (let i = 0; i < statuses.length; i++) {
+                const event = statuses[i];
+                if (!['pause', 'graduate_leave'].includes(event.type)) continue;
+                const next = statuses.slice(i + 1).find(e => e.type === 'return_to_study');
+                const stopEnd = next ? paymentAddDays(next.effective_date, -1) : '9999-12-31';
+                if (start <= stopEnd && end >= event.effective_date) throw new Error('Kỳ thu giao với thời gian nghỉ từ ' + event.effective_date + '. Chọn riêng khoảng thực học.');
+            }
+            const fees = [...(meta.tuition_changes || [])].filter(e => e.effective_date).sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+            for (let i = 0; i < fees.length; i++) {
+                if (Number(fees[i].to_rate) !== 0) continue;
+                const next = fees.slice(i + 1).find(e => Number(e.to_rate) > 0);
+                const freeEnd = next ? paymentAddDays(next.effective_date, -1) : '9999-12-31';
+                if (start <= freeEnd && end >= fees[i].effective_date) throw new Error('Kỳ thu giao với thời gian miễn học phí. Chọn riêng khoảng có phí.');
+            }
+            const registration = student.registration_date;
+            if (registration && start < registration) throw new Error('Kỳ thu không được trước ngày nhập học.');
+        }
+
+        function getPaymentPeriodLabel(start, end) {
+            const a = paymentISODate(start), b = paymentISODate(end);
+            const monthA = String(a.getUTCMonth() + 1) + '/' + a.getUTCFullYear();
+            const monthB = String(b.getUTCMonth() + 1) + '/' + b.getUTCFullYear();
+            const last = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth() + 1, 0)).getUTCDate();
+            if (a.getUTCDate() === 1 && b.getUTCDate() === last) return monthA === monthB ? 'tháng ' + monthA : 'các tháng ' + monthA + ' đến ' + monthB;
+            return 'từ ' + formatDateToVN(start) + ' đến ' + formatDateToVN(end);
+        }
+
+        function getSuggestedPaymentPeriod(student, cycle) {
+            if (isTuitionExempt(student)) return { start: '', end: '' };
+            const start = getStudentTuitionInfo(student).dueStart;
+            if (!start) return { start: '', end: '' };
+            const months = Number(cycle) || 1;
+            let end = ensureYYYYMMDD(addMonthsToDate(new Date(start), months));
+            if (student.status !== 'Đang học') {
+                const pause = getStudentLatestAcademicStatus(student, ['pause', 'graduate_leave']);
+                if (!pause || start >= pause.effective_date) return { start: '', end: '' };
+                const lastStudyDay = paymentAddDays(pause.effective_date, -1);
+                if (end > lastStudyDay) end = lastStudyDay;
+            }
+            return { start, end };
+        }
+
+        function buildQuickPaymentPlan() {
+            if (!state.selectedStudent) return [];
+            const students = [state.selectedStudent, ...state.groupPaymentStudents];
+            const primaryStart = document.getElementById('qp-period-start').value;
+            const primaryEnd = document.getElementById('qp-period-end').value;
+            const cycle = document.getElementById('qp-cycle-months').value;
+            const duration = (paymentISODate(primaryEnd) - paymentISODate(primaryStart)) / 86400000;
+            const overrides = state.quickPaymentOverrides || {};
+            const rows = students.map((student, index) => {
+                if (isTuitionExempt(student)) throw new Error(student.name + ': đang miễn học phí.');
+                const override = overrides[String(student.id)] || {};
+                const suggested = index === 0 ? { start: primaryStart, end: primaryEnd } : getSuggestedPaymentPeriod(student, cycle);
+                let start = override.start || suggested.start;
+                let end = override.end || (index > 0 && cycle === 'custom' && start ? paymentAddDays(start, duration) : suggested.end);
+                assertPaymentPeriodAllowed(student, start, end, getStudentAcademicMeta(student.notes));
+                const parts = splitPaymentPeriod(start, end);
+                if (cycle !== 'custom' && end === ensureYYYYMMDD(addMonthsToDate(new Date(start), Number(cycle)))) {
+                    const fraction = Number(cycle) - Math.floor(Number(cycle));
+                    if (fraction && parts[parts.length - 1].partial) parts[parts.length - 1].weight = fraction;
+                }
+                const weight = getStudentTuitionRate(student) * parts.reduce((sum, part) => sum + part.weight, 0);
+                return { student, start, end, parts, weight, override };
+            });
+            const fixed = rows.reduce((sum, row) => sum + (row.override.amount === undefined ? 0 : row.override.amount), 0);
+            const flexible = rows.filter(row => row.override.amount === undefined);
+            const recommended = Math.round(rows.reduce((sum, row) => sum + row.weight, 0));
+            const total = state.quickAmountManual ? Number(document.getElementById('qp-amount').value) : recommended;
+            if (!Number.isSafeInteger(total) || total <= 0 || fixed > total || (!flexible.length && fixed !== total)) throw new Error('Tổng tiền chưa khớp với tiền riêng của từng học sinh.');
+            const amounts = flexible.length ? allocatePaymentAmount(total - fixed, flexible.map(row => row.weight)) : [];
+            let index = 0;
+            return rows.map(row => {
+                const amount = row.override.amount === undefined ? amounts[index++] : row.override.amount;
+                if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('Mỗi học sinh cần có khoản thu lớn hơn 0đ.');
+                const allocations = allocatePaymentAmount(amount, row.parts.map(part => part.weight));
+                return { ...row, amount, parts: row.parts.map((part, i) => ({ ...part, amount: allocations[i] })) };
+            });
+        }
+
+        function updateQuickPaymentPlan() {
+            const preview = document.getElementById('qp-payment-preview');
+            if (!preview) return;
+            if (!state.selectedStudent) { preview.innerHTML = ''; return; }
+            try {
+                const plan = buildQuickPaymentPlan();
+                const total = plan.reduce((sum, row) => sum + row.amount, 0);
+                if (!state.quickAmountManual) {
+                    document.getElementById('qp-amount').value = total;
+                    document.getElementById('qp-amount-display').value = total.toLocaleString('vi-VN');
+                }
+                const note = document.getElementById('qp-note');
+                const suggestion = 'Đóng học phí ' + getPaymentPeriodLabel(plan[0].start, plan[0].end);
+                if (!note.value || note.value === note.dataset.lastSuggested) note.value = suggestion;
+                note.dataset.lastSuggested = suggestion;
+                document.getElementById('qp-note-suggestion').textContent = 'Gợi ý: ' + suggestion;
+                preview.innerHTML = plan.map((row, index) => `<div class="border border-slate-200 rounded-xl p-2 mb-2 text-xs">
+                    <strong>${escapeHtml(row.student.name)}</strong>
+                    <div class="grid grid-cols-3 gap-1 mt-1">
+                        <input aria-label="Ngày bắt đầu của ${escapeHtml(row.student.name)}" type="date" value="${row.start}" onchange="editQuickPaymentRow(${index}, 'start', this.value)" class="border rounded p-1 min-w-0">
+                        <input aria-label="Ngày kết thúc của ${escapeHtml(row.student.name)}" type="date" value="${row.end}" onchange="editQuickPaymentRow(${index}, 'end', this.value)" class="border rounded p-1 min-w-0">
+                        <input aria-label="Số tiền của ${escapeHtml(row.student.name)}" type="number" min="1" step="1" value="${row.amount}" onchange="editQuickPaymentRow(${index}, 'amount', this.value)" class="border rounded p-1 min-w-0">
+                    </div>
+                    <details class="mt-1 text-slate-500"><summary>${row.parts.length} kỳ chi tiết · ${row.amount.toLocaleString('vi-VN')}đ</summary>${row.parts.map(part => `<div>${formatDateToVN(part.period_start)} → ${formatDateToVN(part.period_end)}: ${part.amount.toLocaleString('vi-VN')}đ${part.partial ? ' (kỳ lẻ, ' + part.days + ' ngày)' : ''}</div>`).join('')}</details>
+                </div>`).join('') + `<p class="text-xs font-bold">Tổng ${total.toLocaleString('vi-VN')}đ · ${plan.length} giao dịch</p>`;
+            } catch (error) { preview.textContent = error.message; }
+        }
+
+        function editQuickPaymentRow(index, field, value) {
+            const students = [state.selectedStudent, ...state.groupPaymentStudents];
+            const student = students[index];
+            if (!student) return;
+            state.quickPaymentOverrides ||= {};
+            state.quickPaymentOverrides[String(student.id)] ||= {};
+            if (field === 'amount') {
+                const oldPlan = buildQuickPaymentPlan();
+                const amount = Number(value);
+                if (!Number.isSafeInteger(amount) || amount <= 0) { updateQuickPaymentPlan(); return; }
+                const total = oldPlan.reduce((sum, row) => sum + row.amount, 0) - oldPlan[index].amount + amount;
+                state.quickAmountManual = true;
+                state.quickPaymentOverrides[String(student.id)].amount = amount;
+                document.getElementById('qp-amount').value = total;
+                document.getElementById('qp-amount-display').value = total.toLocaleString('vi-VN');
+            } else if (index === 0) {
+                setInputValue(field === 'start' ? 'qp-period-start' : 'qp-period-end', value);
+                document.getElementById('qp-cycle-months').value = 'custom';
+            } else {
+                state.quickPaymentOverrides[String(student.id)][field] = value;
+            }
+            updateQuickPaymentPlan();
+        }
+
+        function handleQuickPaymentEndChange() {
+            document.getElementById('qp-cycle-months').value = 'custom';
+            clearQuickPaymentMonthShortcut();
+            updateQuickPaymentPlan();
+        }
+
+        function useSuggestedPaymentNote() {
+            const input = document.getElementById('qp-note');
+            input.value = input.dataset.lastSuggested || '';
+        }
+
+        function renderPaymentBreakdown(payment) {
+            try {
+                const parts = typeof payment.period_breakdown === 'string' ? JSON.parse(payment.period_breakdown) : payment.period_breakdown;
+                if (!Array.isArray(parts) || !parts.length) return '';
+                return `<details class="text-[10px] whitespace-normal"><summary>Chi tiết ${parts.length} kỳ</summary>${payment.group_id ? `<div>Đợt thu: ${escapeHtml(payment.group_id)}</div>` : ''}${parts.map(part => `<div>${escapeHtml(formatDateToVN(part.period_start))} → ${escapeHtml(formatDateToVN(part.period_end))}: ${Number(part.amount).toLocaleString('vi-VN')}đ</div>`).join('')}</details>`;
+            } catch (error) { return ''; }
+        }
+
         function resetQuickPaymentDates() {
             const today = new Date();
-            const nextMonth = new Date();
-            nextMonth.setMonth(today.getMonth() + 1);
+            const nextMonth = addMonthsToDate(today, 1);
+            state.quickAmountManual = false;
+            state.quickPaymentOverrides = {};
 
             setInputValue('qp-payment-date', ensureYYYYMMDD(today));
             setInputValue('qp-period-start', ensureYYYYMMDD(today));
             setInputValue('qp-period-end', ensureYYYYMMDD(nextMonth));
-            document.getElementById('qp-note').value = `Đóng học phí tháng ${today.getMonth() + 1}`;
+            document.getElementById('qp-note').value = '';
+            document.getElementById('qp-note').dataset.lastSuggested = '';
+            updateQuickPaymentPlan();
             document.getElementById('qp-cycle-months').value = "1";
             const monthShortcut = document.getElementById('qp-month-shortcut');
             if (monthShortcut) monthShortcut.value = '';
@@ -2761,10 +2988,7 @@
             const cycleInput = document.getElementById('qp-cycle-months');
             const supportedCycles = ['1', '2', '3', '6', '12'];
             cycleInput.value = supportedCycles.includes(range.monthCount.toString()) ? range.monthCount.toString() : 'custom';
-            const periodLabel = range.monthCount === 1
-                ? `tháng ${range.month}/${range.year}`
-                : `từ tháng ${range.month}/${range.year} đến tháng ${range.endMonth}/${range.endYear}`;
-            document.getElementById('qp-note').value = `Đóng học phí ${periodLabel} - Năm học ${getSchoolYearForDate(range.start)}`;
+            updateQuickPaymentPlan();
         }
 
         function clearQuickPaymentMonthShortcut() {
@@ -2774,20 +2998,10 @@
 
         // Helper cộng tháng (v2.6)
         function addMonthsToDate(startDate, months) {
-            const result = new Date(startDate);
-            if (months === 1.5) {
-                result.setMonth(result.getMonth() + 1);
-                result.setDate(result.getDate() + 15);
-            } else {
-                const intMonths = Math.floor(months);
-                result.setMonth(result.getMonth() + intMonths);
-                const frac = months - intMonths;
-                if (frac > 0) {
-                    result.setDate(result.getDate() + Math.round(frac * 30));
-                }
-            }
-            result.setDate(result.getDate() - 1);
-            return result;
+            const start = ensureYYYYMMDD(startDate);
+            const whole = Math.floor(months);
+            const extra = Math.round((months - whole) * 30);
+            return new Date(paymentAddDays(paymentMonthBoundary(start, whole), extra - 1) + 'T00:00:00');
         }
 
         // Auto tính toán ngày kết thúc khi ngày bắt đầu thay đổi hoặc số tháng thay đổi
@@ -2796,18 +3010,24 @@
             if (!startVal) return;
 
             const cycleVal = document.getElementById('qp-cycle-months').value;
-            if (cycleVal === 'custom') {
-                return;
-            }
+            if (cycleVal === 'custom') { updateQuickPaymentPlan(); return; }
 
             const months = parseFloat(cycleVal) || 1;
             const startDate = new Date(startVal);
             const endDate = addMonthsToDate(startDate, months);
 
-            setInputValue('qp-period-end', ensureYYYYMMDD(endDate));
+            let end = ensureYYYYMMDD(endDate);
+            if (state.selectedStudent && state.selectedStudent.status !== 'Đang học') {
+                const pause = getStudentLatestAcademicStatus(state.selectedStudent, ['pause', 'graduate_leave']);
+                if (pause && end >= pause.effective_date) end = paymentAddDays(pause.effective_date, -1);
+            }
+            setInputValue('qp-period-end', end);
+            updateQuickPaymentPlan();
         }
 
         function handleQuickPaymentCycleChange() {
+            state.quickPaymentOverrides = {};
+            clearQuickPaymentMonthShortcut();
             autoCalculatePeriodEnd();
         }
 
@@ -2817,6 +3037,8 @@
 
         // Định dạng tiền tệ VND tự động khi gõ
         function formatCurrencyInput(input) {
+            state.quickAmountManual = true;
+            Object.values(state.quickPaymentOverrides || {}).forEach(row => delete row.amount);
             let value = input.value.replace(/\D/g, '');
             if (value === '') {
                 input.value = '';
@@ -2832,7 +3054,9 @@
         }
 
         // Chọn nhanh các nút số tiền
-        function setQuickAmount(amount) {
+        function setQuickAmount(amount, automatic = false) {
+            state.quickAmountManual = !automatic;
+            Object.values(state.quickPaymentOverrides || {}).forEach(row => delete row.amount);
             document.getElementById('qp-amount').value = amount;
             document.getElementById('qp-amount-display').value = amount.toLocaleString('vi-VN');
             renderGroupTags();
@@ -2946,6 +3170,11 @@
             if (!student) return;
 
             state.selectedStudent = student;
+            state.groupPaymentStudents = [];
+            state.quickPaymentOverrides = {};
+            state.quickAmountManual = false;
+            document.getElementById('qp-note').value = '';
+            document.getElementById('qp-note').dataset.lastSuggested = '';
 
             // Gán dữ liệu form ẩn
             document.getElementById('qp-student-id').value = student.id;
@@ -2958,7 +3187,7 @@
             reminderButton.disabled = isTuitionExempt(student) || student.status !== 'Đang học';
             reminderButton.classList.toggle('opacity-50', reminderButton.disabled);
             reminderButton.title = isTuitionExempt(student) ? 'Học sinh được miễn học phí' : 'Nhắc học phí';
-            setQuickAmount(rate);
+            setQuickAmount(rate, true);
 
             // Cập nhật Avatar trên Panel tóm tắt
             const avatarContainer = document.getElementById('qp-sum-avatar-container');
@@ -2977,7 +3206,8 @@
 
             // Tự động gợi ý ngày bắt đầu: paid_until + 1 ngày (hoặc ngày nhập học)
             const tuitionInfo = getStudentTuitionInfo(student);
-            const startPeriod = new Date(tuitionInfo.dueStart || ensureYYYYMMDD(new Date()));
+            const suggestedPeriod = getSuggestedPaymentPeriod(student, '1');
+            const startPeriod = suggestedPeriod.start ? new Date(suggestedPeriod.start) : null;
             document.getElementById('qp-sum-paid-until').textContent = tuitionInfo.displayText;
             document.getElementById('qp-sum-paid-until').className = `font-bold mt-0.5 ${tuitionInfo.colorClass}`;
 
@@ -2985,12 +3215,11 @@
             document.getElementById('qp-cycle-months').value = "1";
             clearQuickPaymentMonthShortcut();
 
-            setInputValue('qp-period-start', ensureYYYYMMDD(startPeriod));
-            autoCalculatePeriodEnd();
+            setInputValue('qp-period-start', startPeriod ? ensureYYYYMMDD(startPeriod) : '');
+            setInputValue('qp-period-end', suggestedPeriod.end || '');
+            if (startPeriod) autoCalculatePeriodEnd();
 
-            // Đổ ghi chú mặc định gợi ý
-            const months = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
-            document.getElementById('qp-note').value = `Đóng học phí tháng ${months[startPeriod.getMonth()]}`;
+            updateQuickPaymentPlan();
 
             // Render lịch sử đóng phí 3 giao dịch gần nhất
             renderSelectedStudentRecentPayments(student.id);
@@ -3011,6 +3240,7 @@
             const container = document.getElementById('qp-group-tags');
             if (!container) return;
             container.innerHTML = '';
+            updateQuickPaymentPlan();
 
             if (state.groupPaymentStudents.length === 0) {
                 container.innerHTML = '<span class="text-[10px] text-slate-400 italic">Chưa có học sinh đóng chung nào.</span>';
@@ -3029,19 +3259,14 @@
                 container.appendChild(tag);
             });
 
-            // Gợi ý số tiền chia đều
-            const amount = parseInt(document.getElementById('qp-amount').value) || 0;
-            const count = 1 + state.groupPaymentStudents.length;
-            if (amount > 0) {
-                const splitAmt = Math.round(amount / count);
-                const info = document.createElement('div');
-                info.className = "w-full text-[9px] text-slate-400 mt-1 font-bold italic";
-                info.textContent = `-> Sẽ tự phân phối ra ${count} giao dịch, mỗi bạn đóng: ${splitAmt.toLocaleString('vi-VN')}đ`;
-                container.appendChild(info);
-            }
+            const info = document.createElement('div');
+            info.className = 'text-xs text-slate-500';
+            info.textContent = 'Tiền và kỳ thu từng học sinh được hiển thị trong bảng xem trước bên dưới.';
+            container.appendChild(info);
         }
 
         function removeGroupStudent(id) {
+            if (state.quickPaymentOverrides) delete state.quickPaymentOverrides[id];
             state.groupPaymentStudents = state.groupPaymentStudents.filter(s => s.id.toString() !== id.toString());
             renderGroupTags();
         }
@@ -3102,6 +3327,7 @@
                     <div>
                         <span class="font-extrabold text-slate-700 block">${parseInt(p.amount).toLocaleString('vi-VN')}đ (${escapeHtml(p.payment_method || 'Chuyển khoản')})</span>
                         <span class="text-[9px] text-slate-400 block mt-0.5">Kỳ: ${formatDateToVN(p.period_start)} -> ${formatDateToVN(p.period_end)}</span>
+                        ${renderPaymentBreakdown(p)}
                     </div>
                     <span class="text-[9px] text-slate-400 font-bold">${formatDateToVN(p.payment_date)}</span>
                 `;
@@ -3136,21 +3362,11 @@
                 return;
             }
 
-            const nextStart = document.getElementById('qp-period-start').value;
-            const nextEnd = document.getElementById('qp-period-end').value;
-            const amount = parseInt(document.getElementById('qp-amount').value);
-
-            let message = '';
-            const tuitionInfo = getStudentTuitionInfo(student);
-            if (tuitionInfo.status === 'due') {
-                message = `HNT Education thông báo: Chào Anh/Chị phụ huynh bé ${student.name}, học phí kỳ ${tuitionInfo.rangeText} hiện đã quá hạn ${tuitionInfo.overdueDays} ngày. Nhờ Anh/Chị đóng học phí kỳ này với số tiền là ${amount.toLocaleString('vi-VN')}đ. Trân trọng cảm ơn Anh/Chị!`;
-            } else if (tuitionInfo.status === 'warning') {
-                message = `HNT Education thông báo: Chào Anh/Chị phụ huynh bé ${student.name}, hiện đang đến kỳ đóng học phí ${tuitionInfo.rangeText}. Anh/Chị có thể đóng trong kỳ này với số tiền là ${amount.toLocaleString('vi-VN')}đ. Trân trọng cảm ơn Anh/Chị!`;
-            } else if (student.paid_until) {
-                message = `HNT Education thông báo: Chào Anh/Chị phụ huynh bé ${student.name}, học phí của con hiện đã đóng đến ngày ${formatDateToVN(student.paid_until)}. Kỳ tiếp theo dự kiến từ ngày ${formatDateToVN(nextStart)} đến ${formatDateToVN(nextEnd)} với số tiền là ${amount.toLocaleString('vi-VN')}đ. Trân trọng cảm ơn Anh/Chị!`;
-            } else {
-                message = `HNT Education thông báo: Chào Anh/Chị phụ huynh bé ${student.name}, học phí của con hiện chưa được ghi nhận. Nhờ Anh/Chị đóng học phí kỳ đầu tiên từ ngày ${formatDateToVN(nextStart)} đến ${formatDateToVN(nextEnd)} với số tiền là ${amount.toLocaleString('vi-VN')}đ. Trân trọng cảm ơn Anh/Chị!`;
-            }
+            let row;
+            try { row = buildQuickPaymentPlan()[0]; }
+            catch (error) { showToast('warning', 'Kiểm tra kỳ thu', error.message); return; }
+            if (!row) return;
+            const message = `HNT Education thông báo: Chào Anh/Chị phụ huynh bé ${student.name}, học phí kỳ ${getPaymentPeriodLabel(row.start, row.end)} của con là ${row.amount.toLocaleString('vi-VN')}đ. Nhờ Anh/Chị kiểm tra và đóng phí cho kỳ này. Trân trọng cảm ơn Anh/Chị!`;
 
             navigator.clipboard.writeText(message).then(() => {
                 showToast('success', 'Đã sao chép tin nhắn nhắc học phí!', 'Thầy có thể dán (Paste) gửi ngay cho phụ huynh qua Zalo hoặc SMS.');
@@ -3160,140 +3376,88 @@
         }
 
         // SUBMIT FORM THU TIỀN NHANH
-        async function handleQuickPaymentSubmit(event) {
-            event.preventDefault();
-            if (!requireClientPermission('canAddPayment', 'Tài khoản hiện tại không được nhập học phí.')) return;
+        function getPendingPaymentStorageKey() {
+            const account = (state.config.sessionToken || '').split('.').slice(0, 2).join('.');
+            return 'hnt_pending_payment_batch_' + encodeURIComponent(state.config.apiUrl + '|' + account);
+        }
 
-            if (!isConfigured()) {
-                showToast('error', 'Chưa cấu hình API', 'Vui lòng cấu hình URL Google Sheets trong Tab Cấu hình.');
-                return;
-            }
+        function refreshPendingPaymentNotice() {
+            const element = document.getElementById('qp-pending-payment');
+            if (element) element.classList.toggle('hidden', !localStorage.getItem(getPendingPaymentStorageKey()));
+        }
 
-            const studentId = document.getElementById('qp-student-id').value;
-            const studentName = document.getElementById('qp-student-name').value;
-            const amount = parseInt(document.getElementById('qp-amount').value);
-            const paymentDate = document.getElementById('qp-payment-date').value;
-            const paymentMethod = document.getElementById('qp-payment-method').value;
-            const periodStart = document.getElementById('qp-period-start').value;
-            const periodEnd = document.getElementById('qp-period-end').value;
-            const note = document.getElementById('qp-note').value.trim();
-
-            if (!studentId) {
-                showToast('warning', 'Chưa chọn học sinh', 'Vui lòng tìm và chọn học sinh.');
-                return;
-            }
-
-            if (!Number.isFinite(amount) || amount <= 0) {
-                showToast('warning', 'Số tiền không hợp lệ', 'Học phí phải lớn hơn 0đ.');
-                return;
-            }
-
-            const payingStudents = [state.students.find(s => String(s.id) === String(studentId)), ...state.groupPaymentStudents];
-            if (payingStudents.some(s => s && isTuitionExempt(s))) {
-                showToast('warning', 'Có học sinh miễn học phí', 'Đổi mức phí và ngày áp dụng trước khi thu; bỏ học sinh miễn phí khỏi nhóm.');
-                return;
-            }
-            const primaryName = studentName;
-            const amountTotal = amount;
-            const count = 1 + state.groupPaymentStudents.length;
-            const eachAmount = Math.floor(amountTotal / count);
-            const primaryAmount = amountTotal - eachAmount * (count - 1);
-            if (eachAmount <= 0) { showToast('warning', 'Số tiền quá nhỏ', 'Mỗi học sinh cần có số tiền lớn hơn 0.'); return; }
-
-            const confirmMsg = `Xác nhận thu phí học sinh:\n\n` +
-                               `- Họ tên: ${studentName}\n` +
-                               `- Số tiền: ${amount.toLocaleString('vi-VN')}đ (${paymentMethod})\n` +
-                               `- Ngày đóng tiền: ${formatDateToVN(paymentDate)}\n` +
-                               `- Kỳ gia hạn: Từ ${formatDateToVN(periodStart)} đến ${formatDateToVN(periodEnd)}\n\n` +
-                               `Bạn chắc chắn muốn lưu giao dịch này?`;
-
-            // Confirm message override for group payment (v2.6)
-            let finalConfirmMsg = '';
-            if (count > 1) {
-                const groupNames = state.groupPaymentStudents.map(s => s.name).join(', ');
-                finalConfirmMsg = `Xác nhận thu học phí nhóm gồm ${count} học sinh:\n\n` +
-                             `1. Học sinh chính: ${primaryName} (${eachAmount.toLocaleString('vi-VN')}đ)\n` +
-                             `2. Các học sinh đóng chung: ${groupNames} (mỗi học sinh ${eachAmount.toLocaleString('vi-VN')}đ)\n\n` +
-                             `- Tổng tiền thu: ${amountTotal.toLocaleString('vi-VN')}đ (${paymentMethod})\n` +
-                             `- Ngày đóng: ${formatDateToVN(paymentDate)}\n` +
-                             `- Kỳ đóng phí gợi ý: Từ ${formatDateToVN(periodStart)} đến ${formatDateToVN(periodEnd)}\n\n` +
-                             `Hệ thống sẽ tạo ${count} giao dịch đóng học phí riêng biệt. Bạn chắc chắn muốn tiếp tục?`;
-            } else {
-                finalConfirmMsg = `Xác nhận thu phí học sinh:\n\n` +
-                             `- Họ tên: ${primaryName}\n` +
-                             `- Số tiền: ${amountTotal.toLocaleString('vi-VN')}đ (${paymentMethod})\n` +
-                             `- Ngày đóng tiền: ${formatDateToVN(paymentDate)}\n` +
-                             `- Kỳ gia hạn: Từ ${formatDateToVN(periodStart)} đến ${formatDateToVN(periodEnd)}\n\n` +
-                             `Bạn chắc chắn muốn lưu giao dịch này?`;
-            }
-
-            if (!confirm(finalConfirmMsg)) return;
-
-            showLoader('Đang cập nhật...', `Đang xử lý ${count} giao dịch đóng học phí...`);
-
+        async function sendPaymentBatch(payments) {
+            if (state.paymentSubmitRunning) return;
+            state.paymentSubmitRunning = true;
+            showLoader('Đang ghi nhận...', 'Đang lưu các khoản thu và chi tiết từng kỳ.');
+            const key = getPendingPaymentStorageKey();
             try {
-                // Giao dịch 1: Học sinh chính
-                let successCount = 0;
-                let primaryNote = note;
-                if (count > 1) {
-                    const extraStr = state.groupPaymentStudents.map(s => `${s.name} (ID:${s.id})`).join(', ');
-                    primaryNote += ` (Đóng chung nhóm với: ${extraStr})`;
+                localStorage.setItem(key, JSON.stringify(payments));
+                refreshPendingPaymentNotice();
+                const result = await safeFetch('addPaymentBatch', { payments });
+                if (!result.success) {
+                    if (!result.uncertain && !result.retryable) localStorage.removeItem(key);
+                    throw new Error(result.error || 'Chưa xác nhận lưu thành công.');
                 }
-
-                const resultPrimary = await safeFetch('addPayment', {
-                    paymentData: {
-                        student_id: studentId,
-                        student_name: primaryName,
-                        amount: primaryAmount,
-                        payment_date: paymentDate,
-                        period_start: periodStart,
-                        period_end: periodEnd,
-                        payment_method: paymentMethod,
-                        note: primaryNote
-                    }
-                });
-                if (resultPrimary && resultPrimary.success) {
-                    successCount++;
-                } else { throw new Error(resultPrimary.error || 'Chưa lưu được giao dịch chính.'); }
-
-                // Các giao dịch học sinh phụ đóng chung
-                for (let i = 0; i < state.groupPaymentStudents.length; i++) {
-                    const gs = state.groupPaymentStudents[i];
-                    let gsNote = note + ` (Đóng chung nhóm, người đóng chính: ${primaryName} ID:${studentId})`;
-                    const resultGs = await safeFetch('addPayment', {
-                        paymentData: {
-                            student_id: gs.id,
-                            student_name: gs.name,
-                            amount: eachAmount,
-                            payment_date: paymentDate,
-                            period_start: periodStart,
-                            period_end: periodEnd,
-                            payment_method: paymentMethod,
-                            note: gsNote
-                        }
-                    });
-                    if (resultGs && resultGs.success) {
-                        successCount++;
-                    } else { throw new Error(resultGs.error || 'Chưa hoàn tất nhóm. Giữ nguyên nhóm và thử lại.'); }
-                }
-
-                if (successCount === count) {
-                    showToast('success', 'Thu học phí thành công!', `Đã hoàn tất ghi nhận ${count} giao dịch đóng phí nhóm (Tổng cộng ${amountTotal.toLocaleString('vi-VN')}đ).`);
-                    clearSelectedStudent();
-                    fetchDataFromServer();
-                } else if (successCount > 0) {
-                    showToast('warning', 'Hoàn tất một phần', `Đã ghi nhận thành công ${successCount}/${count} giao dịch. Vui lòng kiểm tra lại Sheets.`);
-                    clearSelectedStudent();
-                    fetchDataFromServer();
-                } else {
-                    showToast('error', 'Lỗi lưu trữ', 'Không thể hoàn tất giao dịch đóng phí nào.');
-                }
-            } catch (err) {
-                console.error(err);
-                showToast('error', 'Lỗi kết nối mạng', err.message || 'Không thể gửi dữ liệu lên máy chủ.');
+                localStorage.removeItem(key);
+                const total = payments.reduce((sum, payment) => sum + payment.amount, 0);
+                showToast('success', 'Thu học phí thành công', `Đã lưu ${payments.length} giao dịch riêng, tổng ${total.toLocaleString('vi-VN')}đ.`);
+                clearSelectedStudent();
+                await fetchDataFromServer();
+            } catch (error) {
+                showToast('error', 'Chưa hoàn tất lưu', error.message);
             } finally {
+                state.paymentSubmitRunning = false;
+                refreshPendingPaymentNotice();
                 hideLoader();
             }
+        }
+
+        async function resumePendingPaymentBatch() {
+            if (!requireClientPermission('canAddPayment', 'Tài khoản hiện tại không được nhập học phí.')) return;
+            if (state.paymentSubmitRunning || !isConfigured()) return;
+            const saved = localStorage.getItem(getPendingPaymentStorageKey());
+            if (!saved) return;
+            let payments;
+            try { payments = JSON.parse(saved); } catch (error) { showToast('error', 'Bản chờ không hợp lệ', 'Đối chiếu Sheet trước khi bỏ yêu cầu chờ.'); return; }
+            const summary = payments.map(p => `${p.student_name}: ${p.amount.toLocaleString('vi-VN')}đ (${formatDateToVN(p.period_start)} → ${formatDateToVN(p.period_end)})`).join('\n');
+            if (confirm('Kiểm tra lại đúng khoản thu đã gửi:\n\n' + summary + '\n\nMáy chủ dùng lại mã yêu cầu để tránh ghi trùng. Tiếp tục?')) await sendPaymentBatch(payments);
+        }
+
+        function clearPendingPaymentBatch() {
+            if (state.paymentSubmitRunning) return;
+            if (!confirm('Chỉ bỏ bản ghi chờ trên máy, không xóa giao dịch trong Sheet. Thầy đã đối chiếu các giao dịch và hạn phí của toàn bộ nhóm trước khi tiếp tục?')) return;
+            localStorage.removeItem(getPendingPaymentStorageKey());
+            refreshPendingPaymentNotice();
+        }
+
+        async function handleQuickPaymentSubmit(event) {
+            event.preventDefault();
+            if (state.paymentSubmitRunning) return;
+            if (!requireClientPermission('canAddPayment', 'Tài khoản hiện tại không được nhập học phí.')) return;
+            if (!isConfigured()) { showToast('error', 'Chưa cấu hình API', 'Vui lòng cấu hình Google Sheet.'); return; }
+            if (localStorage.getItem(getPendingPaymentStorageKey())) {
+                refreshPendingPaymentNotice();
+                showToast('warning', 'Có khoản thu chưa xác nhận', 'Dùng nút kiểm tra yêu cầu chờ; không tạo lại một khoản khác.');
+                return;
+            }
+            let plan;
+            try { plan = buildQuickPaymentPlan(); } catch (error) { showToast('warning', 'Kiểm tra kỳ thu', error.message); return; }
+            if (!plan.length) { showToast('warning', 'Chưa chọn học sinh', 'Chọn học sinh trước khi thu.'); return; }
+            const paymentDate = document.getElementById('qp-payment-date').value;
+            const paymentMethod = document.getElementById('qp-payment-method').value;
+            const noteInput = document.getElementById('qp-note');
+            const manualNote = noteInput.value === noteInput.dataset.lastSuggested ? '' : noteInput.value.trim();
+            const total = plan.reduce((sum, row) => sum + row.amount, 0);
+            const confirmation = plan.map(row => `${row.student.name}: ${row.amount.toLocaleString('vi-VN')}đ\n${formatDateToVN(row.start)} → ${formatDateToVN(row.end)} · ${row.parts.length} kỳ`).join('\n\n');
+            if (!confirm(`Xác nhận ${plan.length} giao dịch riêng:\n\n${confirmation}\n\nTổng: ${total.toLocaleString('vi-VN')}đ\nMỗi giao dịch lưu chi tiết phân bổ kỳ thu. Đồng ý lưu?`)) return;
+            const payments = plan.map(row => ({
+                    student_id: String(row.student.id), student_name: row.student.name, amount: row.amount,
+                    payment_date: paymentDate, payment_method: paymentMethod, period_start: row.start, period_end: row.end,
+                    note: 'Đóng học phí ' + getPaymentPeriodLabel(row.start, row.end) + (manualNote ? ' · ' + manualNote : ''),
+                    period_breakdown: row.parts.map(part => ({ period_start: part.period_start, period_end: part.period_end, amount: part.amount, days: part.days, partial: part.partial }))
+            }));
+            await sendPaymentBatch(payments);
         }
 
 
@@ -3584,7 +3748,7 @@
                         <td class="py-2 px-3 font-bold text-green-700 text-right">${parseInt(p.amount || 0).toLocaleString('vi-VN')}đ</td>
                         <td class="py-2 px-3 font-medium text-slate-500 text-center">${p.payment_method || 'Chuyển khoản'}</td>
                         <td class="py-2 px-3 font-semibold text-slate-650 text-center text-[9px]">Từ ${p.period_start ? formatDateToVN(p.period_start) : '--'} đến ${p.period_end ? formatDateToVN(p.period_end) : '--'}</td>
-                        <td class="py-2 px-3 text-slate-400 italic max-w-[150px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '')}</td>
+                        <td class="py-2 px-3 text-slate-400 italic max-w-[150px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '')}${renderPaymentBreakdown(p)}</td>
                     `;
                     tbody.appendChild(tr);
                 });
@@ -4033,7 +4197,9 @@
                             method: p.payment_method,
                             start: p.period_start,
                             end: p.period_end,
-                            note: p.note
+                            note: p.note,
+                            period_breakdown: p.period_breakdown,
+                            group_id: p.group_id
                         }))
                     };
                 }
@@ -4115,7 +4281,7 @@
                                 <td class="py-2.5 px-3 font-bold text-slate-900">${parseInt(p.amount || 0).toLocaleString('vi-VN')}đ</td>
                                 <td class="py-2.5 px-3 font-medium text-slate-500">Từ ${p.start ? formatDateToVN(p.start) : '--'} đến ${p.end ? formatDateToVN(p.end) : '--'}</td>
                                 <td class="py-2.5 px-3 font-semibold text-slate-600">${escapeHtml(p.method || p.payment_method || '--')}</td>
-                                <td class="py-2.5 px-3 text-slate-400 italic text-[9px] max-w-[120px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '')}</td>
+                                <td class="py-2.5 px-3 text-slate-400 italic text-[9px] max-w-[120px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '')}${renderPaymentBreakdown(p)}</td>
                             </tr>
                         `;
                     });
@@ -4452,7 +4618,7 @@
                             <td class="py-1.5 px-2 font-black text-brand-900 font-mono">${parseInt(p.amount || 0).toLocaleString('vi-VN')}đ</td>
                             <td class="py-1.5 px-2 font-medium text-slate-500 font-mono">${cycleStr}</td>
                             <td class="py-1.5 px-2 text-slate-450">${escapeHtml(p.payment_method || '--')}</td>
-                            <td class="py-1.5 px-2 text-slate-450 max-w-[120px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '--')}</td>
+                            <td class="py-1.5 px-2 text-slate-450 max-w-[120px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '--')}${renderPaymentBreakdown(p)}</td>
                         `;
                         paymentsGrid.appendChild(row);
                     });
@@ -4547,7 +4713,9 @@
                         method: p.payment_method,
                         start: p.period_start,
                         end: p.period_end,
-                        note: p.note
+                        note: p.note,
+                            period_breakdown: p.period_breakdown,
+                            group_id: p.group_id
                     }))
                 };
                 try {
@@ -4761,7 +4929,7 @@
                     <td class="py-2.5 px-3 font-bold text-slate-900">${parseInt(p.amount || 0).toLocaleString('vi-VN')}đ</td>
                     <td class="py-2.5 px-3 font-semibold text-slate-600">${escapeHtml(p.payment_method || 'Chuyển khoản')}</td>
                     <td class="py-2.5 px-3 font-medium text-slate-500">Từ ${p.period_start ? formatDateToVN(p.period_start) : '--'} đến ${p.period_end ? formatDateToVN(p.period_end) : '--'}</td>
-                    <td class="py-2.5 px-3 text-slate-400 italic text-[9px] max-w-[120px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '')}</td>
+                    <td class="py-2.5 px-3 text-slate-400 italic text-[9px] max-w-[120px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '')}${renderPaymentBreakdown(p)}</td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -5759,7 +5927,7 @@
                         <td class="py-2 px-3 text-slate-600 font-semibold font-mono">${p.payment_date ? formatDateToVN(p.payment_date) : '--'}</td>
                         <td class="py-2 px-3 text-slate-500 font-semibold font-mono">${cycleStr}</td>
                         <td class="py-2 px-3 text-slate-450">${escapeHtml(p.payment_method || '--')}</td>
-                        <td class="py-2 px-3 text-slate-450 max-w-[120px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '--')}</td>
+                        <td class="py-2 px-3 text-slate-450 max-w-[120px] truncate" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '--')}${renderPaymentBreakdown(p)}</td>
                     `;
                     paymentsGrid.appendChild(row);
                 });

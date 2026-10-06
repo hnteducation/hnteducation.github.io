@@ -35,6 +35,19 @@ Mỗi khi sửa backend, phải cập nhật deployment Apps Script riêng. Push
 
 Kiểm tra tự động mô phỏng Sheet, mất phản hồi và học lại; cần thử trên deployment Google thật sau khi cài. Chưa có kiểm thử mạng di động hoặc quota Apps Script thực tế trong bộ kiểm tra này.
 
-Bản miễn học phí yêu cầu backend giao thức 4. Cập nhật cả Apps Script và website rồi tải lại trang.
+Bản ghi chú và chi tiết giao dịch yêu cầu backend giao thức 5. Cập nhật cả Apps Script cục bộ và website rồi tải lại trang. Backend vẫn triển khai riêng, không đưa lên GitHub.
+
+## Ghi chú và thu gộp nhiều kỳ / nhiều người
+
+- Gợi ý ghi chú dùng ngày bắt đầu và kết thúc thực tế, có năm; chỉ gọi là “tháng” khi đúng khoảng trọn tháng dương lịch. Đổi số tháng hoặc hạn cuối sẽ cập nhật gợi ý. Ghi chú đã sửa tay được giữ; nút “Dùng ghi chú gợi ý” cho phép thay lại khi muốn.
+- 1,5 tháng được hiểu là một tháng rồi thêm 15 ngày. Cộng tháng xử lý ngày 29–31 và năm nhuận, không để ngày tràn ngoài tháng đích. Kỳ thu tính cả ngày đầu và ngày cuối, nên ngày cuối là ngày trước mốc bắt đầu kỳ tiếp theo.
+- Gợi ý tiền theo mức phí từng học sinh và độ dài kỳ: chu kỳ 1,5 tháng gợi ý 1,5 lần mức tháng; khoảng tùy chọn dùng tỷ lệ số ngày trên độ dài kỳ tháng tương ứng. Đây là gợi ý phân bổ, không phải quy định hoàn tiền hoặc giảm học phí tự động. Có thể nhập tổng tiền khác hoặc sửa riêng từng học sinh trong bảng xem trước.
+- Khi gộp người, từng em dùng kỳ chưa đóng riêng theo hạn phí/ngày học lại của mình; không áp chung ngày của học sinh chính. Tiền tổng nhập tay phân bổ theo tỷ lệ mức phí và độ dài kỳ. Tiền lẻ được phân bổ chính xác để tổng các dòng luôn bằng tổng tiền thu. Nhắc phí chỉ lấy khoản của học sinh chính, không lấy toàn bộ tiền nhóm.
+- Mỗi học sinh có **một giao dịch thu riêng**, cùng mã đợt thu `group_id`. Cột `period_breakdown` lưu các kỳ tháng liên tiếp và kỳ lẻ với ngày, số ngày và tiền riêng; tổng chi tiết bằng tiền giao dịch. Không tạo thêm nhiều giao dịch tiền thật cho cùng một khoản thu, tránh cộng doanh thu nhiều lần. Lịch sử giao dịch và báo cáo phụ huynh có nút mở chi tiết từng kỳ.
+- Với học sinh tạm nghỉ có ngày nghỉ, gợi ý chỉ đến ngày trước khi nghỉ nếu còn khoản chưa đóng. Kỳ giao với thời gian nghỉ hoặc miễn phí bị chặn, cần chọn riêng khoảng thực học/có phí. Học lại dùng ngày bắt đầu tính phí đã ghi nhận. Nghỉ chưa có ngày thì cần cập nhật lịch sử trước khi thu.
+- Máy chủ kiểm tra toàn bộ nhóm trước khi ghi, rồi ghi các giao dịch thành một khối. Cập nhật hạn phí là bước tiếp theo; Apps Script bị dừng giữa chừng vẫn cần đối chiếu, không được coi đây là giao dịch cơ sở dữ liệu có khả năng tự hoàn tác.
+- Khoản thu chưa xác nhận được lưu trên máy theo tài khoản và URL API. Sau khi tải lại trang, dùng “Kiểm tra / gửi lại cùng yêu cầu” để giữ nguyên dữ liệu và mã chống lặp. Yêu cầu chờ chặn tạo khoản mới; chỉ bỏ yêu cầu chờ sau khi đối chiếu Sheet.
+- Giao dịch cho một kỳ ở xa được giữ riêng nhưng không kéo hạn “đã đóng đến” qua khoảng chưa đóng. Khi khoảng hở được đóng bổ sung, hạn phí nối tiếp các khoản đã đóng trước. Hạn phí cũ đã tồn tại không tự sửa lại.
+- Dữ liệu cũ vẫn đọc được; không tự phân bổ lại giao dịch lịch sử vì thiếu thông tin về cách chia tiền lúc thu.
 
 Để kiểm tra đầy đủ cả backend cục bộ và web trên máy, chạy `node tools/check-management.cjs`. Kiểm tra này mô phỏng Apps Script; không triển khai mã hoặc ghi vào Google Sheet thật. Backend cục bộ không bị kiểm tra mật mã bởi GitHub CI vì không nằm trong repo.
